@@ -41,15 +41,13 @@ async def scrape_ashby_board(client: httpx.AsyncClient, board: str, target_locat
         location = j.get("location", "")
         location_lower = location.lower() if location else ""
 
-        if not any(kw in title_lower for kw in [
-            "software", "engineer", "developer", "full stack", "frontend", "backend",
-            "ai", "ml", "data", "platform", "devops", "sre", "agent",
-        ]):
+        is_software = any(kw in title_lower for kw in [
+            "software", "engineer", "developer", "full stack", "fullstack", "frontend",
+            "backend", "ai", "ml", "data", "platform", "devops", "sre", "agent",
+            "ops", "technical", "tech", "architect",
+        ])
+        if not is_software:
             continue
-
-        is_junior = any(kw in title_lower for kw in [
-            "intern", "junior", "associate", "new grad", "entry", "apprentice"
-        ]) or "II" in title or " 2," in title
 
         is_remote = "remote" in location_lower or "anywhere" in location_lower or "worldwide" in location_lower
 
@@ -57,8 +55,16 @@ async def scrape_ashby_board(client: httpx.AsyncClient, board: str, target_locat
             if not any(t.lower() in location_lower for t in target_locations):
                 continue
 
-        if not is_junior and not is_remote:
-            continue
+        is_junior = any(kw in title_lower for kw in [
+            "intern", "junior", "associate", "new grad", "entry", "apprentice", " i"
+        ]) and "senior" not in title_lower
+
+        if is_junior:
+            seniority = "intern" if "intern" in title_lower else "junior"
+        elif "staff" in title_lower or "principal" in title_lower:
+            seniority = "senior"
+        else:
+            seniority = "mid"
 
         apply_url = j.get("applyUrl") or j.get("jobUrl") or f"https://jobs.ashbyhq.com/{board}"
 
@@ -73,7 +79,7 @@ async def scrape_ashby_board(client: httpx.AsyncClient, board: str, target_locat
             posted_date=datetime.now(timezone.utc),
             is_remote=is_remote,
             employment_type="full-time",
-            seniority="junior" if is_junior else "mid",
+            seniority=seniority,
             company_size="startup",
         ))
 
