@@ -209,6 +209,7 @@ def _render_pdf_fpdf2(resume: dict, output_path: str) -> str:
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.set_margins(15, 15, 15)
     pdf.add_page()
+    W = pdf.w - pdf.l_margin - pdf.r_margin
 
     basics = resume.get("basics", {})
     name = _safe(basics.get("name", "Resume"))
@@ -222,41 +223,47 @@ def _render_pdf_fpdf2(resume: dict, output_path: str) -> str:
 
     pdf.set_text_color(26, 26, 26)
     pdf.set_font("Helvetica", "B", 18)
-    pdf.cell(0, 10, name, ln=True, align="C")
+    pdf.set_xy(pdf.l_margin, pdf.get_y())
+    pdf.cell(W, 10, name, ln=True, align="C")
 
     if label:
         pdf.set_font("Helvetica", "", 11)
         pdf.set_text_color(80, 80, 80)
-        pdf.cell(0, 6, label, ln=True, align="C")
+        pdf.set_x(pdf.l_margin)
+        pdf.cell(W, 6, label, ln=True, align="C")
         pdf.set_text_color(26, 26, 26)
 
     contact_parts = [p for p in [email, phone, loc_str] if p]
     if contact_parts:
         pdf.set_font("Helvetica", "", 9)
         pdf.set_text_color(80, 80, 80)
-        pdf.cell(0, 5, "  |  ".join(contact_parts), ln=True, align="C")
+        pdf.set_x(pdf.l_margin)
+        pdf.cell(W, 5, "  |  ".join(contact_parts), ln=True, align="C")
         pdf.set_text_color(26, 26, 26)
 
     profile_strs = [_safe(f"{p.get('network', '')}: {p.get('url', '')}") for p in profiles if p.get("url")]
-    if profile_strs:
+    for ps in profile_strs[:3]:
         pdf.set_font("Helvetica", "", 8)
         pdf.set_text_color(37, 99, 235)
-        for ps in profile_strs[:3]:
-            pdf.cell(0, 4, ps, ln=True, align="C")
+        pdf.set_x(pdf.l_margin)
+        pdf.cell(W, 4, ps, ln=True, align="C")
+    if profile_strs:
         pdf.set_text_color(26, 26, 26)
 
     if summary:
         pdf.ln(3)
         pdf.set_font("Helvetica", "I", 10)
         pdf.set_text_color(60, 60, 60)
-        pdf.multi_cell(0, 5, summary)
+        pdf.set_x(pdf.l_margin)
+        pdf.multi_cell(W, 5, summary)
         pdf.set_text_color(26, 26, 26)
 
     def section_header(title: str) -> None:
         pdf.ln(4)
         pdf.set_font("Helvetica", "B", 12)
         pdf.set_text_color(37, 99, 235)
-        pdf.cell(0, 7, _safe(title).upper(), ln=True)
+        pdf.set_x(pdf.l_margin)
+        pdf.cell(W, 7, _safe(title).upper(), ln=True)
         pdf.set_draw_color(37, 99, 235)
         pdf.set_line_width(0.4)
         y = pdf.get_y()
@@ -269,13 +276,15 @@ def _render_pdf_fpdf2(resume: dict, output_path: str) -> str:
         section_header("Education")
         for edu in education:
             pdf.set_font("Helvetica", "B", 10)
-            pdf.cell(0, 5, _safe(edu.get("institution", "")), ln=True)
+            pdf.set_x(pdf.l_margin)
+            pdf.cell(W, 5, _safe(edu.get("institution", "")), ln=True)
             dates = _safe(" - ".join(filter(None, [edu.get("startDate", ""), edu.get("endDate", "")])))
             study = _safe(f"{edu.get('studyType', '')} in {edu.get('area', '')}".strip())
             line = study + (f"  ({dates})" if dates else "")
             pdf.set_font("Helvetica", "", 8)
             pdf.set_text_color(80, 80, 80)
-            pdf.cell(0, 4, line, ln=True)
+            pdf.set_x(pdf.l_margin)
+            pdf.cell(W, 4, line, ln=True)
             pdf.set_text_color(26, 26, 26)
 
     work = resume.get("work", [])
@@ -283,41 +292,49 @@ def _render_pdf_fpdf2(resume: dict, output_path: str) -> str:
         section_header("Experience")
         for job in work:
             pdf.set_font("Helvetica", "B", 10)
-            pdf.cell(0, 5, _safe(job.get("position", "")), ln=True)
+            pdf.set_x(pdf.l_margin)
+            pdf.cell(W, 5, _safe(job.get("position", "")), ln=True)
             dates = _safe(" - ".join(filter(None, [job.get("startDate", ""), job.get("endDate", "")])))
             sub = _safe(job.get("company", "")) + (f"  ({dates})" if dates else "")
             pdf.set_font("Helvetica", "I", 9)
             pdf.set_text_color(80, 80, 80)
-            pdf.cell(0, 4, sub, ln=True)
+            pdf.set_x(pdf.l_margin)
+            pdf.cell(W, 4, sub, ln=True)
             pdf.set_text_color(26, 26, 26)
             for h in job.get("highlights", [])[:5]:
                 pdf.set_font("Helvetica", "", 9)
-                pdf.multi_cell(0, 4, f"- {_safe(h)}")
+                pdf.set_x(pdf.l_margin)
+                pdf.multi_cell(W, 4, f"- {_safe(h)}")
 
     projects = resume.get("projects", [])
     if projects:
         section_header("Projects")
         for proj in projects[:3]:
             pdf.set_font("Helvetica", "B", 10)
-            pdf.cell(0, 5, _safe(proj.get("name", "")), ln=True)
+            pdf.set_x(pdf.l_margin)
+            pdf.cell(W, 5, _safe(proj.get("name", "")), ln=True)
             tech = proj.get("tech", [])
             if tech:
                 pdf.set_font("Helvetica", "I", 8)
                 pdf.set_text_color(80, 80, 80)
-                pdf.cell(0, 4, "  |  ".join(_safe(t) for t in tech[:6]), ln=True)
+                pdf.set_x(pdf.l_margin)
+                pdf.cell(W, 4, "  |  ".join(_safe(t) for t in tech[:6]), ln=True)
                 pdf.set_text_color(26, 26, 26)
             for h in proj.get("highlights", [])[:3]:
                 pdf.set_font("Helvetica", "", 9)
-                pdf.multi_cell(0, 4, f"- {_safe(h)}")
+                pdf.set_x(pdf.l_margin)
+                pdf.multi_cell(W, 4, f"- {_safe(h)}")
 
     achievements = resume.get("achievements", [])
     if achievements:
         section_header("Achievements")
         for a in achievements[:3]:
             pdf.set_font("Helvetica", "B", 9)
-            pdf.cell(0, 5, _safe(a.get("title", "")), ln=True)
+            pdf.set_x(pdf.l_margin)
+            pdf.cell(W, 5, _safe(a.get("title", "")), ln=True)
             pdf.set_font("Helvetica", "", 9)
-            pdf.multi_cell(0, 4, _safe(a.get("description", "")))
+            pdf.set_x(pdf.l_margin)
+            pdf.multi_cell(W, 4, _safe(a.get("description", "")))
 
     skills = resume.get("skills", {})
     if skills:
@@ -326,9 +343,16 @@ def _render_pdf_fpdf2(resume: dict, output_path: str) -> str:
             if isinstance(skill_list, list) and skill_list:
                 cat_label = _safe(category.replace("_", " ").title())
                 pdf.set_font("Helvetica", "B", 9)
-                pdf.cell(40, 5, f"{cat_label}:", ln=False)
+                pdf.set_x(pdf.l_margin)
+                pdf.cell(35, 5, f"{cat_label}:", ln=False)
                 pdf.set_font("Helvetica", "", 9)
-                pdf.multi_cell(0, 5, ", ".join(_safe(s) for s in skill_list))
+                x_after = pdf.get_x()
+                remaining = W - (x_after - pdf.l_margin)
+                if remaining < 10:
+                    pdf.set_x(pdf.l_margin)
+                    pdf.cell(W, 5, f"{cat_label}: {', '.join(_safe(s) for s in skill_list)}", ln=True)
+                else:
+                    pdf.multi_cell(remaining, 5, ", ".join(_safe(s) for s in skill_list))
 
     try:
         pdf.output(output_path)
