@@ -27,6 +27,9 @@ from discover.greenhouse import scrape_greenhouse_all
 from discover.github_jobs import scrape_github
 from discover.lever_api import scrape_lever_all
 from discover.ashby_api import scrape_ashby_all
+from discover.remoteok import scrape_remoteok
+from discover.remote_feeds import scrape_weworkremotely, scrape_remotive
+from discover.turing_upwork import scrape_upwork_rss, scrape_turing
 from discover.models import JobListing, DiscoveredJobs, TailoredResume, OutreachEmail
 from tailor.claude_tailor import tailor_resume, score_match, verify_fidelity
 from tailor.pdf_render import render_pdf_inline
@@ -137,6 +140,16 @@ async def discover_jobs(
     if "toptal" in source_list:
         from discover.toptal_scraper import scrape_toptal
         tasks.append(("toptal", scrape_toptal(max_age_days=max_age_days, target_locations=settings.target_locations)))
+    if "remoteok" in source_list:
+        tasks.append(("remoteok", scrape_remoteok(max_age_days=max_age_days, target_locations=settings.target_locations)))
+    if "weworkremotely" in source_list:
+        tasks.append(("weworkremotely", scrape_weworkremotely(max_age_days=max_age_days, target_locations=settings.target_locations)))
+    if "remotive" in source_list:
+        tasks.append(("remotive", scrape_remotive()))
+    if "upwork" in source_list:
+        tasks.append(("upwork", scrape_upwork_rss()))
+    if "turing" in source_list:
+        tasks.append(("turing", scrape_turing()))
 
     for source_name, coro in tasks:
         try:
@@ -249,7 +262,7 @@ async def generate_email(request: EmailRequest):
 
 @app.post("/daily-sweep", response_model=DailySweepResponse)
 async def daily_sweep(
-    sources: str = "yc,greenhouse,github,lever,ashby",
+    sources: str = "yc,greenhouse,github,lever,ashby,remoteok,weworkremotely,remotive",
     max_jobs: int = 10,
     tailor: bool = True,
     generate_emails: bool = True,
@@ -358,11 +371,18 @@ async def daily_sweep(
 
                         full_body = f"{email_body}\n\n---\nApplied for: {job.title} at {job.company}\n{job.url}"
                         attachment = result_entry.get("pdf_path", "") or ""
+                        attachment_arg = ""
                         if attachment:
-                            pdf_full_path = Path(__file__).parent / attachment
-                            if not pdf_full_path.exists():
-                                pdf_full_path = Path(attachment)
-                            attachment_arg = str(pdf_full_path) if pdf_full_path.exists() else ""
+                            pdf_path = Path(attachment)
+                            if not pdf_path.is_absolute():
+                                pdf_path = Path(__file__).parent / attachment
+                                if not pdf_path.exists():
+                                    pdf_path = Path(settings.output_dir) / Path(attachment).name
+                            if pdf_path.exists():
+                                attachment_arg = str(pdf_path)
+                                logger.info(f"Attaching PDF: {attachment_arg} ({pdf_path.stat().st_size} bytes)")
+                            else:
+                                logger.warning(f"PDF not found: tried {pdf_path}")
                         else:
                             attachment_arg = ""
 

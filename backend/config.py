@@ -45,7 +45,7 @@ class Settings(BaseSettings):
 
     # ── Paths ────────────────────────────────────────────
     base_resume_path: str = "data/base_resume.json"
-    output_dir: str = "templates/outputs"
+    output_dir: str = str(Path(__file__).parent / "templates" / "outputs")
     resume_template_path: str = "templates/resume.html.j2"
 
     # ── Schedule ────────────────────────────────────────
