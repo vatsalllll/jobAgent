@@ -1,0 +1,30 @@
+services:
+  - type: web
+    name: job-agent
+    runtime: python
+    region: oregon
+    plan: free
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: LLM_PROVIDER
+        value: huggingface
+      - key: HF_MODEL
+        value: Qwen/Qwen3-32B
+      - key: HF_PROVIDER
+        value: groq
+      - key: HF_API_KEY
+        sync: false
+      - key: TRACKING_SHEET_ID
+        sync: false
+      - key: MIN_SALARY_INR
+        value: "50000"
+      - key: MAX_LISTING_AGE_DAYS
+        value: "4"
+      - key: SENDER_EMAIL
+        value: vatsalomar1@gmail.com
+      - key: SENDER_NAME
+        value: Vatsal Omar
+      - key: DISABLE_PLAYWRIGHT
+        value: "true"

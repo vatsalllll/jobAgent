@@ -1,0 +1,25 @@
+# Sensitive — never commit
+.env
+*.pickle
+google_credentials.json
+google_token.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+venv/
+
+# Output
+templates/outputs/*.pdf
+
+# Database
+data/tracker.db
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/

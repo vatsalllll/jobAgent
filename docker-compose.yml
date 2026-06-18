@@ -1,0 +1,16 @@
+# Job Agent — Full Stack
+# n8n (orchestrator) + FastAPI (core logic)
+#
+# Start everything:
+#   1. cp backend/.env.example backend/.env   # fill in API keys
+#   2. docker compose up -d                   # start n8n
+#   3. cd backend && source venv/bin/activate && python main.py  # start FastAPI
+#
+# Or use the start script:
+#   ./start.sh
+
+services:
+  n8n:
+    extends:
+      file: n8n/docker-compose.yml
+      service: n8n

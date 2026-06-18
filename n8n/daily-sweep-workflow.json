@@ -1,0 +1,201 @@
+{
+  "name": "Daily Job Agent Sweep",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 4
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Schedule Trigger (Every 4h)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://host.docker.internal:8000/discover-jobs",
+        "method": "POST",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {"name": "sources", "value": "yc,greenhouse"},
+            {"name": "max_age_days", "value": "4"}
+          ]
+        },
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "discover-jobs",
+      "name": "Discover Jobs",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [500, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract jobs array from response\nconst data = $input.first().json;\nconst jobs = data.jobs || [];\n\nreturn jobs.map(job => ({\n  json: {\n    job_id: job.id,\n    title: job.title,\n    company: job.company,\n    location: job.location,\n    url: job.url,\n    source: job.source,\n    description: job.description || '',\n    posted_date: job.posted_date,\n    salary_min: job.salary_min\n  }\n}));"
+      },
+      "id": "split-jobs",
+      "name": "Split Into Individual Jobs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [750, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://host.docker.internal:8000/tailor-resume",
+        "method": "POST",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {"name": "job_id", "value": "={{ $json.job_id }}"},
+            {"name": "job_title", "value": "={{ $json.title }}"},
+            {"name": "company", "value": "={{ $json.company }}"},
+            {"name": "job_description", "value": "={{ $json.description }}"}
+          ]
+        },
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "tailor-resume",
+      "name": "Tailor Resume (Claude)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1000, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Filter: only keep jobs with match_score >= 60\nconst result = $input.first().json;\nconst score = result.match_score || 0;\n\nif (score < 60) {\n  // Low match - skip this job\n  return [];\n}\n\nreturn [{\n  json: {\n    ...$input.first().json,\n    company: $('split-jobs').first().json.company,\n    title: $('split-jobs').first().json.title,\n    url: $('split-jobs').first().json.url,\n    source: $('split-jobs').first().json.source,\n    location: $('split-jobs').first().json.location\n  }\n}];"
+      },
+      "id": "filter-score",
+      "name": "Filter: Score ≥ 60",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1250, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://host.docker.internal:8000/generate-email",
+        "method": "POST",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {"name": "job_title", "value": "={{ $json.title }}"},
+            {"name": "company", "value": "={{ $json.company }}"},
+            {"name": "job_description", "value": "={{ $json.description || '' }}"},
+            {"name": "tailored_resume", "value": "={{ JSON.stringify($json.tailored_resume) }}"}
+          ]
+        },
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "generate-email",
+      "name": "Generate Outreach Email",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1500, 300]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $env.TRACKING_SHEET_ID }}",
+          "mode": "id"
+        },
+        "sheetName": "Applications",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "date_applied": "={{ $now.format('YYYY-MM-DD') }}",
+            "company": "={{ $('split-jobs').first().json.company }}",
+            "role": "={{ $('split-jobs').first().json.title }}",
+            "location": "={{ $('split-jobs').first().json.location }}",
+            "source": "={{ $('split-jobs').first().json.source }}",
+            "match_score": "={{ $json.match_score || 0 }}",
+            "email_subject": "={{ $json.subject || '' }}",
+            "status": "Ready to Apply",
+            "url": "={{ $('split-jobs').first().json.url }}",
+            "resume_pdf": "={{ $json.pdf_path || '' }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "log-to-sheets",
+      "name": "Log to Google Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [1750, 300],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "1",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Aggregate results for notification\nconst items = $input.all();\nconst total = items.length;\n\nif (total === 0) {\n  return [{ json: { summary: 'No new high-match jobs found today.' } }];\n}\n\nconst companies = items.map(i => i.json.company || 'Unknown').join(', ');\nconst avgScore = Math.round(items.reduce((sum, i) => sum + (i.json.match_score || 0), 0) / total);\n\nreturn [{\n  json: {\n    summary: `🎯 Daily Sweep Complete\\n\\nFound ${total} high-match jobs (avg score: ${avgScore})\\nCompanies: ${companies}\\n\\nCheck Google Sheets for details.`\n  }\n}];"
+      },
+      "id": "notify",
+      "name": "Build Notification",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2000, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Handle no-results case\nif ($input.all().length === 0 || !$input.first().json.jobs || $input.first().json.jobs.length === 0) {\n  return [{\n    json: { summary: 'No matching jobs found in this sweep. Will retry next run.' }\n  }];\n}\nreturn $input.all();"
+      },
+      "id": "check-empty",
+      "name": "Check Empty Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2250, 300]
+    }
+  ],
+  "connections": {
+    "Schedule Trigger (Every 12h)": {
+      "main": [[{"node": "Discover Jobs", "type": "main", "index": 0}]]
+    },
+    "Discover Jobs": {
+      "main": [[{"node": "Split Into Individual Jobs", "type": "main", "index": 0}]]
+    },
+    "Split Into Individual Jobs": {
+      "main": [[{"node": "Tailor Resume (Claude)", "type": "main", "index": 0}]]
+    },
+    "Tailor Resume (Claude)": {
+      "main": [[{"node": "Filter: Score ≥ 60", "type": "main", "index": 0}]]
+    },
+    "Filter: Score ≥ 60": {
+      "main": [[{"node": "Generate Outreach Email", "type": "main", "index": 0}]]
+    },
+    "Generate Outreach Email": {
+      "main": [[{"node": "Log to Google Sheets", "type": "main", "index": 0}]]
+    },
+    "Log to Google Sheets": {
+      "main": [[{"node": "Build Notification", "type": "main", "index": 0}]]
+    },
+    "Build Notification": {
+      "main": [[{"node": "Check Empty Results", "type": "main", "index": 0}]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "pinData": {},
+  "versionId": "1.0.0",
+  "active": true
+}

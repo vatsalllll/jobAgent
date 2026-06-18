@@ -1,0 +1,23 @@
+name: Job Agent Scheduler
+
+on:
+  schedule:
+    - cron: "0 */4 * * *"
+  workflow_dispatch:
+
+jobs:
+  trigger-sweep:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger daily sweep
+        run: |
+          curl -s -X POST "${{ secrets.RENDER_URL }}/daily-sweep?max_jobs=10&tailor=true&generate_emails=true" \
+            --max-time 300 \
+            -w "\nHTTP %{http_code}" | tail -5
+          echo ""
+          echo "Sweep triggered at $(date -u)"
+
+      - name: Sync to Google Sheets
+        run: |
+          curl -s -X POST "${{ secrets.RENDER_URL }}/sync-sheets" \
+            -w "\nHTTP %{http_code}" | tail -3
