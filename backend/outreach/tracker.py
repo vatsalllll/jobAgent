@@ -24,10 +24,12 @@ def _get_db() -> sqlite3.Connection:
             resume_pdf TEXT,
             email_subject TEXT,
             email_body TEXT,
+            contact_email TEXT,
             status TEXT DEFAULT 'discovered',
             applied_date TEXT,
             response_date TEXT,
             follow_up_date TEXT,
+            emailed_at TEXT,
             notes TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
@@ -127,3 +129,26 @@ def get_dashboard() -> dict:
         "recent": [dict(row) for row in recent],
         "recent_sweeps": [dict(row) for row in sweeps],
     }
+
+
+def was_emailed_recently(company: str, days: int = 14) -> bool:
+    from datetime import datetime, timezone, timedelta
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    conn = _get_db()
+    row = conn.execute(
+        "SELECT emailed_at FROM applications WHERE company = ? AND emailed_at >= ? LIMIT 1",
+        (company, cutoff),
+    ).fetchone()
+    conn.close()
+    return row is not None
+
+
+def mark_emailed(job_id: str, contact_email: str = "") -> None:
+    now = datetime.now(timezone.utc).isoformat()
+    conn = _get_db()
+    conn.execute(
+        "UPDATE applications SET emailed_at = ?, contact_email = ?, status = CASE WHEN status = 'discovered' OR status = 'tailored' THEN 'emailed' ELSE status END, updated_at = ? WHERE id = ?",
+        (now, contact_email, now, job_id),
+    )
+    conn.commit()
+    conn.close()

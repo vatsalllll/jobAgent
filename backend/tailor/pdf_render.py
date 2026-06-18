@@ -232,31 +232,173 @@ def render_html_inline(resume: dict) -> str:
 
 
 async def render_pdf_inline(resume: dict, output_path: Optional[str] = None) -> str:
-    try:
-        from playwright.async_api import async_playwright
-    except ImportError:
-        return ""
-
-    html = render_html_inline(resume)
-
+    company = resume.get("metadata", {}).get("company", "unknown")
+    role = resume.get("metadata", {}).get("role", "resume")
     if output_path is None:
-        company = resume.get("metadata", {}).get("company", "unknown")
-        role = resume.get("metadata", {}).get("role", "resume")
         safe_name = f"{company}_{role}".lower().replace(" ", "_")[:60]
         output_path = str(Path(settings.output_dir) / f"{safe_name}.pdf")
 
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
 
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        page = await browser.new_page()
-        await page.set_content(html, wait_until="networkidle")
-        await page.pdf(
-            path=output_path,
-            format="A4",
-            margin={"top": "0.4in", "bottom": "0.4in", "left": "0.5in", "right": "0.5in"},
-            print_background=True,
-        )
-        await browser.close()
+    try:
+        from playwright.async_api import async_playwright
+        html = render_html_inline(resume)
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            page = await browser.new_page()
+            await page.set_content(html, wait_until="networkidle")
+            await page.pdf(
+                path=output_path,
+                format="A4",
+                margin={"top": "0.4in", "bottom": "0.4in", "left": "0.5in", "right": "0.5in"},
+                print_background=True,
+            )
+            await browser.close()
+        return output_path
+    except ImportError:
+        return _render_pdf_fpdf2(resume, output_path)
+    except Exception:
+        return _render_pdf_fpdf2(resume, output_path)
 
-    return output_path
+
+def _render_pdf_fpdf2(resume: dict, output_path: str) -> str:
+    """Generate a clean PDF using fpdf2 — no browser required. Works on Render."""
+    try:
+        from fpdf import FPDF
+    except ImportError:
+        return ""
+
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.add_page()
+
+    accent = (37, 99, 235)
+    text_dark = (26, 26, 26)
+    text_muted = (102, 102, 102)
+
+    basics = resume.get("basics", {})
+    name = basics.get("name", "Resume")
+    label = basics.get("label", "")
+    email = basics.get("email", "")
+    phone = basics.get("phone", "")
+    url = basics.get("url", "")
+    summary = basics.get("summary", "")
+    location = basics.get("location", {})
+    loc_str = ", ".join(filter(None, [location.get("city", ""), location.get("region", ""), location.get("countryCode", "")]))
+    profiles = basics.get("profiles", [])
+
+    pdf.set_font("Helvetica", "B", 18)
+    pdf.set_text_color(*text_dark)
+    pdf.cell(0, 10, name, ln=True)
+
+    if label:
+        pdf.set_font("Helvetica", "", 10)
+        pdf.set_text_color(*text_muted)
+        pdf.cell(0, 5, label, ln=True)
+
+    contact_parts = [p for p in [email, phone, loc_str] if p]
+    if contact_parts:
+        pdf.set_font("Helvetica", "", 8)
+        pdf.set_text_color(*text_muted)
+        pdf.cell(0, 5, "  |  ".join(contact_parts), ln=True)
+
+    profile_strs = [f"{p.get('network', '')}: {p.get('url', '')}" for p in profiles if p.get("url")]
+    if profile_strs:
+        pdf.set_font("Helvetica", "", 7)
+        pdf.set_text_color(accent[0], accent[1], accent[2])
+        for ps in profile_strs[:3]:
+            pdf.cell(0, 4, ps, ln=True)
+
+    if summary:
+        pdf.ln(2)
+        pdf.set_font("Helvetica", "I", 9)
+        pdf.set_text_color(*text_muted)
+        pdf.multi_cell(0, 4, summary)
+
+    def section_header(title: str) -> None:
+        pdf.ln(3)
+        pdf.set_font("Helvetica", "B", 11)
+        pdf.set_text_color(*accent)
+        pdf.cell(0, 6, title.upper(), ln=True)
+        pdf.set_draw_color(*accent)
+        pdf.set_line_width(0.5)
+        y = pdf.get_y()
+        pdf.line(10, y, 200, y)
+        pdf.ln(2)
+        pdf.set_text_color(*text_dark)
+
+    education = resume.get("education", [])
+    if education:
+        section_header("Education")
+        for edu in education:
+            pdf.set_font("Helvetica", "B", 10)
+            pdf.cell(0, 5, edu.get("institution", ""), ln=True)
+            dates = " - ".join(filter(None, [edu.get("startDate", ""), edu.get("endDate", "")]))
+            study = f"{edu.get('studyType', '')} in {edu.get('area', '')}".strip()
+            line = study + (f"  ({dates})" if dates else "")
+            pdf.set_font("Helvetica", "", 8)
+            pdf.set_text_color(*text_muted)
+            pdf.cell(0, 4, line, ln=True)
+            pdf.set_text_color(*text_dark)
+
+    work = resume.get("work", [])
+    if work:
+        section_header("Experience")
+        for job in work:
+            pdf.set_font("Helvetica", "B", 10)
+            pdf.cell(0, 5, job.get("position", ""), ln=True)
+            dates = " - ".join(filter(None, [job.get("startDate", ""), job.get("endDate", "")]))
+            sub = f"{job.get('company', '')}" + (f"  ({dates})" if dates else "")
+            pdf.set_font("Helvetica", "I", 9)
+            pdf.set_text_color(*text_muted)
+            pdf.cell(0, 4, sub, ln=True)
+            pdf.set_text_color(*text_dark)
+            for h in job.get("highlights", [])[:5]:
+                pdf.set_font("Helvetica", "", 9)
+                txt = h.replace("\u2014", "-").replace("\u2013", "-").encode("latin-1", "replace").decode("latin-1")
+                pdf.multi_cell(0, 4, f"- {txt}")
+
+    projects = resume.get("projects", [])
+    if projects:
+        section_header("Projects")
+        for proj in projects[:3]:
+            pdf.set_font("Helvetica", "B", 10)
+            pdf.cell(0, 5, proj.get("name", ""), ln=True)
+            tech = proj.get("tech", [])
+            if tech:
+                pdf.set_font("Helvetica", "I", 8)
+                pdf.set_text_color(*text_muted)
+                pdf.cell(0, 4, "  |  ".join(tech[:6]), ln=True)
+                pdf.set_text_color(*text_dark)
+            for h in proj.get("highlights", [])[:3]:
+                pdf.set_font("Helvetica", "", 9)
+                txt = h.replace("\u2014", "-").replace("\u2013", "-").encode("latin-1", "replace").decode("latin-1")
+                pdf.multi_cell(0, 4, f"- {txt}")
+
+    achievements = resume.get("achievements", [])
+    if achievements:
+        section_header("Achievements")
+        for a in achievements[:3]:
+            pdf.set_font("Helvetica", "B", 9)
+            pdf.cell(0, 5, a.get("title", ""), ln=True)
+            pdf.set_font("Helvetica", "", 9)
+            desc = a.get("description", "").replace("\u2014", "-").replace("\u2013", "-").encode("latin-1", "replace").decode("latin-1")
+            pdf.multi_cell(0, 4, desc)
+
+    skills = resume.get("skills", {})
+    if skills:
+        section_header("Technical Skills")
+        pdf.set_font("Helvetica", "", 9)
+        for category, skill_list in skills.items():
+            if isinstance(skill_list, list) and skill_list:
+                cat_label = category.replace("_", " ").title()
+                pdf.set_font("Helvetica", "B", 9)
+                pdf.cell(35, 4, f"{cat_label}:", ln=False)
+                pdf.set_font("Helvetica", "", 9)
+                pdf.multi_cell(0, 4, ", ".join(skill_list))
+
+    try:
+        pdf.output(output_path)
+        return output_path
+    except Exception:
+        return ""

@@ -283,8 +283,24 @@ async def daily_sweep(
 
     tailored_count = 0
     email_count = 0
+    skipped_dedup = 0
+
+    from outreach.tracker import was_emailed_recently, mark_emailed
 
     for job in jobs:
+        if was_emailed_recently(job.company, days=14):
+            skipped_dedup += 1
+            results.append({
+                "job_id": job.id,
+                "title": job.title,
+                "company": job.company,
+                "location": job.location,
+                "url": job.url,
+                "source": job.source,
+                "skipped": "already_emailed_within_14_days",
+            })
+            continue
+
         result_entry = {
             "job_id": job.id,
             "title": job.title,
@@ -345,6 +361,7 @@ async def daily_sweep(
                             attachment_arg = ""
 
                         send_email(recipient, email_subject, full_body, attachment_path=attachment_arg)
+                        mark_emailed(job.id, recipient)
 
                         result_entry["email_sent"] = True
                         result_entry["contact_email"] = recipient

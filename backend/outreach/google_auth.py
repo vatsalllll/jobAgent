@@ -82,7 +82,7 @@ def sync_to_sheet(spreadsheet_id: str, applications: list[dict]) -> int:
 
     headers = [
         "Date", "Company", "Role", "Location", "Source", "Match Score",
-        "Email Subject", "Status", "URL", "Resume PDF", "Notes"
+        "Email Subject", "Status", "Contact", "URL", "Resume PDF", "Notes"
     ]
 
     values = [headers]
@@ -96,6 +96,7 @@ def sync_to_sheet(spreadsheet_id: str, applications: list[dict]) -> int:
             app.get("match_score", 0),
             app.get("email_subject", ""),
             app.get("status", ""),
+            app.get("contact_email", ""),
             app.get("url", ""),
             app.get("resume_pdf", ""),
             app.get("notes", ""),

@@ -9,29 +9,34 @@ from config import settings
 from tailor.llm import get_llm, extract_json
 
 
-OUTREACH_SYSTEM_PROMPT = """You are an expert at writing personalized, professional cold outreach emails.
-Your emails get responses because they are:
+OUTREACH_SYSTEM_PROMPT = """You are an expert at writing personalized, professional cold outreach emails
+that actually get responses from startup founders and hiring managers.
 
-1. Specific — you reference the recipient's company, product, or recent news
-2. Relevant — you explain exactly why the candidate fits THIS specific role
-3. Concise — 4-6 sentences max. Nobody reads long cold emails.
-4. Confident but not arrogant — professional, warm, direct
-5. Action-oriented — clear next step (call, reply, connect)
+Your emails succeed because they are:
+1. Specific — you reference the recipient's company, product, or mission (not generic praise)
+2. Substantive — you explain WHY you are interested in this specific company
+3. Value-forward — you tell them what you can contribute, not just ask for a job
+4. Concise — 4 short paragraphs max. Nobody reads long cold emails.
+5. Confident but not arrogant — professional, warm, direct
+6. Action-oriented — clear next step with low friction (15-min call, reply, etc.)
 
 Rules:
-- Subject line: include the role title, keep it under 50 chars
+- Subject line: include the role title, keep it under 60 chars
 - Never use templates like "I hope this email finds you well"
-- Never use buzzwords: "passionate", "rockstar", "ninja", "synergy"
+- Never use buzzwords: "passionate", "rockstar", "ninja", "synergy", "eager"
 - Never beg or sound desperate
-- Always include a specific detail about the company or role that shows you did research
-- Close with a clear, low-friction ask (e.g., "Would you be open to a 15-minute chat?")"""
+- Always mention that the resume is attached
+- Always include 1-2 specific projects/achievements that directly match the role
+- Close with a clear, low-friction ask (e.g., "Would you be open to a 15-minute chat next week?")
+- Write at a 9th-grade reading level — short sentences, active verbs"""
 
 
 OUTREACH_PROMPT = """[CANDIDATE]
 Name: {candidate_name}
-Current: Computer Science student at BITS Pilani, graduating July 2026
-Key strength: Multi-agent AI systems, LLM orchestration, full-stack product engineering
-Portfolio highlights:
+Background: Computer Science student at BITS Pilani, graduating July 2026
+Key strengths: Multi-agent AI systems, LLM orchestration, full-stack product engineering
+
+Notable projects:
 {portfolio_summary}
 
 [RECIPIENT]
@@ -45,17 +50,17 @@ Company: {company}
 Why the candidate fits: {fit_rationale}
 
 [GOAL]
-Write a personalized cold outreach email that:
-1. Opens with a specific, genuine observation about the company or role
-2. Briefly connects the candidate's experience to what the company needs
-3. Mentions 1-2 specific projects or achievements that are directly relevant
-4. Asks for a conversation (not a job — a conversation)
+Write a 4-paragraph personalized cold outreach email that:
+1. Opens with a specific, genuine observation about {company} — what they do, what mission they serve, or why they caught your attention
+2. Explains WHY you are specifically interested in this role (not just any job)
+3. Describes what you can BRING to the team — 1-2 concrete projects or skills directly relevant to {company}'s work
+4. Closes with a low-friction ask and explicitly mentions the attached resume
 
 [FORMAT]
 Return valid JSON:
 {{
-  "subject": "<subject line, under 50 chars>",
-  "body": "<email body, 4-6 sentences, plain text>"
+  "subject": "<subject line, under 60 chars, includes role title>",
+  "body": "<email body, 4 paragraphs, plain text, ~150-200 words>"
 }}
 
 Return ONLY the JSON, no preamble."""
@@ -111,7 +116,7 @@ async def generate_outreach_email(
     response_text = await llm.generate(
         system_prompt=OUTREACH_SYSTEM_PROMPT,
         user_prompt=prompt,
-        max_tokens=1024,
+        max_tokens=1500,
         temperature=0.5,
     )
 
@@ -119,7 +124,10 @@ async def generate_outreach_email(
     if result is None:
         result = {
             "subject": f"Application: {job_title} at {company}",
-            "body": response_text.strip()[:500],
+            "body": response_text.strip()[:1000],
         }
+
+    if result.get("body") and "resume" not in result["body"].lower() and "attached" not in result["body"].lower():
+        result["body"] = result["body"].rstrip() + "\n\nMy tailored resume is attached for your review."
 
     return result
