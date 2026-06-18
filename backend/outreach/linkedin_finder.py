@@ -17,13 +17,14 @@ from bs4 import BeautifulSoup
 
 async def google_linkedin_search(company: str, role: str = "recruiter") -> list[dict]:
     """
-    Google search for LinkedIn profiles at a company.
+    Search for LinkedIn profiles at a company using DuckDuckGo HTML
+    (more reliable than Google scraping, no CAPTCHA).
     Returns list of {name, title, linkedin_url, snippet}
     """
     queries = [
         f'site:linkedin.com/in "{company}" "{role}"',
         f'site:linkedin.com/in "{company}" hiring',
-        f'site:linkedin.com/in "{company}" talent acquisition',
+        f'site:linkedin.com/in "{company}" talent',
         f'site:linkedin.com/in "{company}" engineering manager',
     ]
 
@@ -31,46 +32,52 @@ async def google_linkedin_search(company: str, role: str = "recruiter") -> list[
     seen_urls = set()
 
     async with httpx.AsyncClient(
-        timeout=15.0,
+        timeout=20.0,
         headers={
             "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
         },
     ) as client:
         for query in queries:
             try:
-                url = f"https://www.google.com/search?q={query.replace(' ', '+')}"
+                url = f"https://html.duckduckgo.com/html/?q={query.replace(' ', '+')}"
                 resp = await client.get(url, follow_redirects=True)
                 if resp.status_code != 200:
                     continue
 
                 soup = BeautifulSoup(resp.text, "lxml")
-                for a in soup.find_all("a", href=True):
-                    href = a["href"]
+                for result_div in soup.find_all("div", class_=re.compile(r"result", re.I)):
+                    a = result_div.find("a", href=True)
+                    if not a:
+                        continue
+                    href = a.get("href", "")
+                    if "linkedin.com/in/" not in href and "uddg=" in href:
+                        match = re.search(r"uddg=([^&]+)", href)
+                        if match:
+                            from urllib.parse import unquote
+                            href = unquote(match.group(1))
+
                     if "linkedin.com/in/" not in href:
                         continue
-                    match = re.search(r"linkedin\.com/in/([a-zA-Z0-9-]+)", href)
-                    if not match:
+
+                    profile_match = re.search(r"linkedin\.com/in/([a-zA-Z0-9-]+)", href)
+                    if not profile_match:
                         continue
-                    profile_url = f"https://linkedin.com/in/{match.group(1)}"
+                    profile_url = f"https://linkedin.com/in/{profile_match.group(1)}"
                     if profile_url in seen_urls:
                         continue
                     seen_urls.add(profile_url)
 
-                    text = a.get_text(strip=True)
-                    title = ""
-                    for parent in a.parents:
-                        if parent.name == "div":
-                            parent_text = parent.get_text(separator=" | ", strip=True)
-                            if len(parent_text) > 30 and len(parent_text) < 300:
-                                title = parent_text
-                                break
+                    name = a.get_text(strip=True)
+                    snippet_el = result_div.find(class_=re.compile(r"snippet|result__snippet", re.I))
+                    snippet = snippet_el.get_text(strip=True) if snippet_el else ""
 
-                    if "linkedin.com" in text.lower() or "linkedin" in text.lower():
-                        text = ""
+                    if not name or len(name) < 3:
+                        text = result_div.get_text(separator=" | ", strip=True)
+                        name = text.split("|")[0].strip()[:60] if text else ""
 
                     results.append({
-                        "name": text.split(" - ")[0].strip() if text else "",
-                        "title": title[:200] if title else "",
+                        "name": name,
+                        "title": snippet[:200],
                         "linkedin_url": profile_url,
                         "query_used": query,
                     })
