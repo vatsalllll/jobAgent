@@ -116,9 +116,11 @@ def sync_to_sheet(spreadsheet_id: str, applications: list[dict]) -> int:
     return result.get("updatedRows", 0)
 
 
-def send_email(to: str, subject: str, body: str) -> dict:
+def send_email(to: str, subject: str, body: str, attachment_path: str = "") -> dict:
     import base64
     from email.message import EmailMessage
+    from pathlib import Path
+    from mimetypes import guess_type
 
     service = get_gmail_service()
 
@@ -126,6 +128,20 @@ def send_email(to: str, subject: str, body: str) -> dict:
     msg.set_content(body)
     msg["To"] = to
     msg["Subject"] = subject
+
+    if attachment_path:
+        path = Path(attachment_path)
+        if path.exists() and path.is_file():
+            mime_type, _ = guess_type(str(path))
+            if mime_type is None:
+                mime_type = "application/octet-stream"
+            maintype, subtype = mime_type.split("/", 1)
+            msg.add_attachment(
+                path.read_bytes(),
+                maintype=maintype,
+                subtype=subtype,
+                filename=path.name,
+            )
 
     encoded = base64.urlsafe_b64encode(msg.as_bytes()).decode()
     result = service.users().messages().send(

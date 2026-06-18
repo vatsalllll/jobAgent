@@ -335,14 +335,21 @@ async def daily_sweep(
                         recipient_name = best.get("name", "") if best.get("name") else "Hiring Team"
 
                         full_body = f"{email_body}\n\n---\nApplied for: {job.title} at {job.company}\n{job.url}"
-                        send_email(recipient, email_subject, full_body)
+                        attachment = result_entry.get("pdf_path", "") or ""
+                        if attachment:
+                            pdf_full_path = Path(__file__).parent / attachment
+                            if not pdf_full_path.exists():
+                                pdf_full_path = Path(attachment)
+                            attachment_arg = str(pdf_full_path) if pdf_full_path.exists() else ""
+                        else:
+                            attachment_arg = ""
 
-                        cc_body = f"[CC] Sent to {recipient} ({best.get('source','pattern')})\n\n{email_body}"
-                        send_email(settings.sender_email, f"[COPY] {email_subject}", cc_body)
+                        send_email(recipient, email_subject, full_body, attachment_path=attachment_arg)
+                        send_email(settings.sender_email, f"[COPY] {email_subject}", f"Original sent to: {recipient}\n\n{full_body}")
 
                         result_entry["email_sent"] = True
                         result_entry["contact_email"] = recipient
-                        logger.info(f"Email sent to {recipient} for {job.company}")
+                        logger.info(f"Email sent to {recipient} for {job.company}" + (" (with PDF)" if attachment_arg else ""))
                     except Exception as e:
                         logger.warning(f"Gmail send skipped: {e}")
 
@@ -369,6 +376,18 @@ async def daily_sweep(
         results.append(result_entry)
 
     log_sweep(sweep_id, len(jobs), tailored_count, email_count, errors)
+
+    if settings.tracking_sheet_id:
+        try:
+            from outreach.google_auth import sync_to_sheet
+            conn = _get_db()
+            rows = conn.execute("SELECT * FROM applications ORDER BY created_at DESC").fetchall()
+            conn.close()
+            apps = [dict(r) for r in rows]
+            synced = sync_to_sheet(settings.tracking_sheet_id, apps)
+            logger.info(f"Synced {synced} rows to Google Sheets")
+        except Exception as e:
+            logger.warning(f"Sheet sync skipped: {e}")
 
     return DailySweepResponse(
         sweep_id=sweep_id,
