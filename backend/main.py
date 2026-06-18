@@ -26,6 +26,7 @@ from discover.yc_scraper import scrape_yc_jobs
 from discover.greenhouse import scrape_greenhouse_all
 from discover.github_jobs import scrape_github
 from discover.lever_api import scrape_lever_all
+from discover.ashby_api import scrape_ashby_all
 from discover.models import JobListing, DiscoveredJobs, TailoredResume, OutreachEmail
 from tailor.claude_tailor import tailor_resume, score_match, verify_fidelity
 from tailor.pdf_render import render_pdf_inline
@@ -90,7 +91,7 @@ async def health():
 
 @app.post("/discover-jobs", response_model=DiscoveredJobs)
 async def discover_jobs(
-    sources: str = "yc,greenhouse,github,lever",
+    sources: str = "yc,greenhouse,github,lever,ashby",
     max_age_days: int = None,
     min_salary_inr: int = None,
 ):
@@ -131,6 +132,11 @@ async def discover_jobs(
             max_age_days=max_age_days,
             target_locations=settings.target_locations,
         )))
+    if "ashby" in source_list:
+        tasks.append(("ashby", scrape_ashby_all(target_locations=settings.target_locations)))
+    if "toptal" in source_list:
+        from discover.toptal_scraper import scrape_toptal
+        tasks.append(("toptal", scrape_toptal(max_age_days=max_age_days, target_locations=settings.target_locations)))
 
     for source_name, coro in tasks:
         try:
@@ -243,7 +249,7 @@ async def generate_email(request: EmailRequest):
 
 @app.post("/daily-sweep", response_model=DailySweepResponse)
 async def daily_sweep(
-    sources: str = "yc,greenhouse,github,lever",
+    sources: str = "yc,greenhouse,github,lever,ashby",
     max_jobs: int = 10,
     tailor: bool = True,
     generate_emails: bool = True,
