@@ -345,7 +345,6 @@ async def daily_sweep(
                             attachment_arg = ""
 
                         send_email(recipient, email_subject, full_body, attachment_path=attachment_arg)
-                        send_email(settings.sender_email, f"[COPY] {email_subject}", f"Original sent to: {recipient}\n\n{full_body}")
 
                         result_entry["email_sent"] = True
                         result_entry["contact_email"] = recipient
