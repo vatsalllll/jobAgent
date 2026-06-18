@@ -10,11 +10,9 @@ __pycache__/
 *.pyo
 venv/
 
-# Output
-templates/outputs/*.pdf
-
-# Database
-data/tracker.db
+# Output — never commit
+backend/templates/outputs/
+backend/data/tracker.db
 
 # OS
 .DS_Store
