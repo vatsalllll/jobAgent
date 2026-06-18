@@ -55,6 +55,15 @@ def sync_to_sheet(spreadsheet_id: str, applications: list[dict]) -> int:
     service = get_sheets_service()
     sheet_name = "Applications"
 
+    spreadsheet = service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
+    existing_sheets = [s["properties"]["title"] for s in spreadsheet.get("sheets", [])]
+
+    if sheet_name not in existing_sheets:
+        service.spreadsheets().batchUpdate(
+            spreadsheetId=spreadsheet_id,
+            body={"requests": [{"addSheet": {"properties": {"title": sheet_name}}}]},
+        ).execute()
+
     headers = [
         "Date", "Company", "Role", "Location", "Source", "Match Score",
         "Email Subject", "Status", "URL", "Resume PDF", "Notes"
