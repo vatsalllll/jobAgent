@@ -232,8 +232,10 @@ def render_html_inline(resume: dict) -> str:
 
 
 async def render_pdf_inline(resume: dict, output_path: Optional[str] = None) -> str:
-    """Render resume to PDF using the inline HTML template."""
-    from playwright.async_api import async_playwright
+    try:
+        from playwright.async_api import async_playwright
+    except ImportError:
+        return ""
 
     html = render_html_inline(resume)
 
