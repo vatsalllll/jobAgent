@@ -28,3 +28,9 @@ services:
         value: Vatsal Omar
       - key: DISABLE_PLAYWRIGHT
         value: "true"
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_REFRESH_TOKEN
+        sync: false
