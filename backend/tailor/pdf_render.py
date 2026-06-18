@@ -368,7 +368,10 @@ async def render_pdf_inline(resume: dict, output_path: Optional[str] = None) -> 
         safe_name = f"{company}_{role}".lower().replace(" ", "_")[:60]
         output_path = str(Path(settings.output_dir) / f"{safe_name}.pdf")
 
-    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    try:
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        output_path = f"/tmp/{safe_name}.pdf"
 
     try:
         from playwright.async_api import async_playwright
@@ -386,6 +389,14 @@ async def render_pdf_inline(resume: dict, output_path: Optional[str] = None) -> 
             await browser.close()
         return output_path
     except ImportError:
-        return _render_pdf_fpdf2(resume, output_path)
+        result = _render_pdf_fpdf2(resume, output_path)
+        if not result:
+            alt_path = f"/tmp/{company}_{role}.pdf".lower().replace(" ", "_")[:60]
+            result = _render_pdf_fpdf2(resume, alt_path)
+        return result
     except Exception:
-        return _render_pdf_fpdf2(resume, output_path)
+        result = _render_pdf_fpdf2(resume, output_path)
+        if not result:
+            alt_path = f"/tmp/{company}_{role}.pdf".lower().replace(" ", "_")[:60]
+            result = _render_pdf_fpdf2(resume, alt_path)
+        return result
