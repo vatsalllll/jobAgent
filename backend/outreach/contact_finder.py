@@ -6,6 +6,7 @@ from typing import Optional
 import httpx
 
 from config import settings
+from outreach.google_search import find_linkedin_contacts, find_careers_page
 
 COMMON_DOMAINS = {
     "stripe.com": "stripe.com", "notion.so": "notion.so", "figma.com": "figma.com",
@@ -44,13 +45,12 @@ RECRUITER_TITLES = [
 
 
 def _score_contact(contact: dict) -> int:
-    """Score a contact for relevance. Higher = better."""
     score = 0
-    position = contact.get("position", "").lower()
-    email = contact.get("email", "").lower()
-    ctype = contact.get("type", "").lower()
-    confidence = contact.get("confidence", "low")
-    source = contact.get("source", "")
+    position = (contact.get("position") or "").lower()
+    email = (contact.get("email") or "").lower()
+    ctype = (contact.get("type") or "").lower()
+    confidence = contact.get("confidence") or "low"
+    source = contact.get("source") or ""
 
     if source == "hunter":
         score += 20
@@ -85,7 +85,7 @@ def _score_contact(contact: dict) -> int:
 
 
 async def find_company_domain(company_name: str, company_url: str = "") -> str:
-    clean = company_name.lower().strip()
+    clean = (company_name or "").lower().strip()
     clean = re.sub(r"\s*\([^)]*\)", "", clean)
     clean = re.sub(r"[^a-z0-9]", "", clean)
 
@@ -107,9 +107,12 @@ async def find_company_domain(company_name: str, company_url: str = "") -> str:
 
 
 async def _find_yc_founders(company_name: str) -> list[dict]:
-    """Try to find founders for YC companies via the YC API."""
+    if not company_name:
+        return []
     try:
-        slug = company_name.lower().replace(" ", "-").replace(".", "")
+        slug = re.sub(r"[^a-z0-9-]", "", company_name.lower().replace(" ", "-").replace(".", ""))
+        if not slug:
+            return []
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.get(
                 f"https://api.ycombinator.com/v0.1/companies/{slug}",
@@ -169,9 +172,28 @@ async def _search_hunter(domain: str, api_key: str) -> list[dict]:
         return []
 
 
-async def discover_contact_emails(company_name: str, company_url: str = "") -> list[dict]:
+async def discover_company_info(company_name: str, company_url: str = "") -> dict:
+    """
+    Full company info discovery:
+    - Email contacts (Hunter + patterns + YC API)
+    - LinkedIn contacts (Google Search)
+    - Careers page URL
+    - Domain
+    """
+    company_name = (company_name or "").strip()
+    if not company_name:
+        return {
+            "domain": "",
+            "contacts": [],
+            "linkedin_contacts": [],
+            "careers_page": "",
+        }
+
     domain = await find_company_domain(company_name, company_url)
+
     contacts = []
+    linkedin_contacts = []
+    careers_page = ""
 
     for pattern in CONTACT_PATTERNS:
         email = pattern.replace("{domain}", domain)
@@ -195,24 +217,41 @@ async def discover_contact_emails(company_name: str, company_url: str = "") -> l
         contacts = yc_founders + contacts
 
     contacts.sort(key=_score_contact, reverse=True)
-    return contacts[:10]
+
+    if settings.google_search_api_key and settings.google_cse_id:
+        linkedin_contacts = await find_linkedin_contacts(company_name, domain)
+        careers_page = await find_careers_page(company_name, company_url)
+
+    return {
+        "domain": domain,
+        "contacts": contacts[:10],
+        "linkedin_contacts": linkedin_contacts,
+        "careers_page": careers_page,
+    }
 
 
-def get_best_contact(contacts: list[dict], prefer_role: str = "founder") -> dict:
+def get_best_contact(contacts: list[dict]) -> dict:
     if not contacts:
         return {"email": "", "type": "unknown", "confidence": "none", "source": "none", "name": "", "position": ""}
 
     sorted_contacts = sorted(contacts, key=_score_contact, reverse=True)
     best = sorted_contacts[0]
 
-    if "@" not in best.get("email", ""):
+    email = (best.get("email") or "").strip()
+    if "@" not in email:
         return {"email": "", "type": "unknown", "confidence": "none", "source": "none", "name": "", "position": ""}
 
-    return best
+    return {
+        "email": email,
+        "type": (best.get("type") or "unknown").strip(),
+        "confidence": (best.get("confidence") or "none").strip(),
+        "source": (best.get("source") or "none").strip(),
+        "name": (best.get("name") or "").strip(),
+        "position": (best.get("position") or "").strip(),
+    }
 
 
 async def test_hunter() -> dict:
-    """Quick health check for Hunter.io credentials."""
     hunter_key = settings.hunter_api_key or ""
     if not hunter_key:
         return {"status": "no_key", "message": "HUNTER_API_KEY not configured"}

@@ -1,14 +1,3 @@
-"""
-Job Agent — FastAPI Application
-Main entry point that wires together all pipelines:
-  POST /discover-jobs     → scrape YC + Greenhouse for fresh listings
-  POST /tailor-resume     → Claude-tailored resume for a specific job
-  POST /generate-email    → personalized outreach email
-  POST /daily-sweep       → full pipeline: discover → tailor → email
-  GET  /health            → health check
-  GET  /dashboard         → summary of tracked applications
-"""
-
 import json
 import asyncio
 import logging
@@ -34,8 +23,9 @@ from discover.models import JobListing, DiscoveredJobs, TailoredResume, Outreach
 from tailor.claude_tailor import tailor_resume, score_match, verify_fidelity
 from tailor.pdf_render import render_pdf_inline
 from outreach.email_gen import generate_outreach_email
-from outreach.contact_finder import discover_contact_emails, get_best_contact
-from outreach.tracker import log_application, log_sweep, get_dashboard as tracker_dashboard, _get_db
+from outreach.contact_finder import discover_company_info, get_best_contact
+from outreach.email_monitor import check_all_applications
+from outreach.tracker import log_application, log_sweep, get_dashboard as tracker_dashboard, _get_db, mark_emailed, was_emailed_recently
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -43,11 +33,9 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="Job Agent",
     description="AI-powered job application automation agent. Discovers jobs, tailors resumes, generates outreach emails.",
-    version="1.0.0",
+    version="1.1.0",
 )
 
-
-# ── Request / Response Models ─────────────────────────────
 
 class TailorRequest(BaseModel):
     job_id: str
@@ -85,8 +73,6 @@ class DailySweepResponse(BaseModel):
     results: list[dict] = Field(default_factory=list)
 
 
-# ── Endpoints ─────────────────────────────────────────────
-
 @app.get("/health")
 async def health():
     return {"status": "ok", "timestamp": datetime.now(timezone.utc).isoformat()}
@@ -98,14 +84,6 @@ async def discover_jobs(
     max_age_days: int = None,
     min_salary_inr: int = None,
 ):
-    """
-    Discover fresh job listings from configured sources.
-
-    Query params:
-    - sources: comma-separated list of sources (yc, greenhouse)
-    - max_age_days: max listing age in days (default from config)
-    - min_salary_inr: minimum monthly salary in INR (default from config)
-    """
     if max_age_days is None:
         max_age_days = settings.max_listing_age_days
     if min_salary_inr is None:
@@ -161,10 +139,7 @@ async def discover_jobs(
             logger.error(error_msg)
             errors.append(error_msg)
 
-    # Apply freshness filter
     filtered = [j for j in all_jobs if j.age_days <= max_age_days]
-
-    # Sort by freshness (newest first)
     filtered.sort(key=lambda j: j.posted_date or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
 
     return DiscoveredJobs(
@@ -178,11 +153,6 @@ async def discover_jobs(
 
 @app.post("/tailor-resume", response_model=TailorResponse)
 async def tailor_resume_endpoint(request: TailorRequest):
-    """
-    Tailor the base resume for a specific job using the configured LLM.
-
-    Returns the tailored resume JSON + match score + PDF path.
-    """
     try:
         from tailor.llm import get_llm, reset_provider
         reset_provider()
@@ -191,7 +161,6 @@ async def tailor_resume_endpoint(request: TailorRequest):
         raise HTTPException(status_code=500, detail=f"LLM not configured: {e}")
 
     try:
-        # 1. Tailor resume
         logger.info(f"Tailoring resume for: {request.job_title} at {request.company}")
         tailored = await tailor_resume(
             base_resume=BASE_RESUME,
@@ -200,19 +169,16 @@ async def tailor_resume_endpoint(request: TailorRequest):
             company=request.company,
         )
 
-        # 2. Score match
         score_result = await score_match(
             job_description=request.job_description,
             tailored_resume=tailored,
         )
 
-        # 3. Verify fidelity
         verification = await verify_fidelity(
             base_resume=BASE_RESUME,
             tailored_resume=tailored,
         )
 
-        # 4. Generate PDF
         tailored["metadata"] = {
             "job_id": request.job_id,
             "company": request.company,
@@ -236,7 +202,6 @@ async def tailor_resume_endpoint(request: TailorRequest):
 
 @app.post("/generate-email", response_model=EmailResponse)
 async def generate_email(request: EmailRequest):
-    """Generate a personalized outreach email for a job application."""
     try:
         from tailor.llm import get_llm, reset_provider
         reset_provider()
@@ -267,22 +232,10 @@ async def daily_sweep(
     tailor: bool = True,
     generate_emails: bool = True,
 ):
-    """
-    Full daily pipeline: discover → tailor → generate outreach emails.
-
-    This is the endpoint that n8n calls on a schedule.
-
-    Query params:
-    - sources: which job sources to scan
-    - max_jobs: max jobs to process (limit API costs)
-    - tailor: whether to tailor resumes
-    - generate_emails: whether to generate outreach emails
-    """
     sweep_id = f"sweep-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
     errors: list[str] = []
     results: list[dict] = []
 
-    # 1. Discover jobs
     try:
         discovered = await discover_jobs(sources=sources)
 
@@ -291,7 +244,6 @@ async def daily_sweep(
             source_counts[j.source] = source_counts.get(j.source, 0) + 1
         logger.info(f"Daily sweep [{sweep_id}]: Source breakdown: {source_counts}")
 
-        # Prioritize YC first, then interleave remaining sources
         by_source: dict[str, list] = {}
         for j in discovered.jobs:
             by_source.setdefault(j.source, []).append(j)
@@ -331,10 +283,10 @@ async def daily_sweep(
     email_count = 0
     skipped_dedup = 0
 
-    from outreach.tracker import was_emailed_recently, mark_emailed
-
     for job in jobs:
-        if was_emailed_recently(job.company, days=14):
+        is_yc = job.source == "yc"
+
+        if not is_yc and was_emailed_recently(job.company, days=14):
             skipped_dedup += 1
             results.append({
                 "job_id": job.id,
@@ -354,6 +306,7 @@ async def daily_sweep(
             "location": job.location,
             "url": job.url,
             "source": job.source,
+            "is_yc": is_yc,
             "match_score": 0,
             "pdf_path": None,
             "email_subject": None,
@@ -361,6 +314,32 @@ async def daily_sweep(
         }
 
         try:
+            company_info = await discover_company_info(job.company, job.url)
+            best_contact = get_best_contact(company_info["contacts"])
+            linkedin_contacts = company_info.get("linkedin_contacts", [])
+            careers_page = company_info.get("careers_page", "")
+            linkedin_str = ", ".join([f"{c['name']} ({c['linkedin_url']})" for c in linkedin_contacts[:2]]) if linkedin_contacts else ""
+
+            if is_yc:
+                result_entry["action"] = "logged_for_manual_apply"
+                log_application(
+                    job_id=job.id,
+                    company=job.company,
+                    role=job.title,
+                    location=job.location,
+                    source=job.source,
+                    url=job.url,
+                    match_score=0,
+                    linkedin_contact=linkedin_str,
+                    careers_page=careers_page,
+                    status="pending_manual_apply",
+                    is_yc=True,
+                    notes=f"YC company. Apply manually. LinkedIn: {linkedin_str}. Careers: {careers_page}",
+                )
+                logger.info(f"YC company logged for manual apply: {job.company}")
+                results.append(result_entry)
+                continue
+
             if tailor:
                 tailored_result = await tailor_resume_endpoint(TailorRequest(
                     job_id=job.id,
@@ -375,11 +354,9 @@ async def daily_sweep(
                 email_body = ""
                 email_subject = ""
                 if generate_emails:
-                    contacts = await discover_contact_emails(job.company, job.url)
-                    best = get_best_contact(contacts)
-                    recipient = best.get("email", "") if best.get("email") else settings.sender_email
-                    recipient_name = best.get("name", "") if best.get("name") else "Hiring Team"
-                    recipient_position = best.get("position", "") if best.get("position") else "Hiring Team"
+                    recipient = best_contact.get("email", "") if best_contact.get("email") else settings.sender_email
+                    recipient_name = best_contact.get("name", "") if best_contact.get("name") else "Hiring Team"
+                    recipient_position = best_contact.get("position", "") if best_contact.get("position") else "Hiring Team"
                     is_founder = any(k in recipient_position.lower() for k in ["founder", "ceo", "cto", "chief"])
 
                     email_result = await generate_outreach_email(
@@ -397,7 +374,6 @@ async def daily_sweep(
                     email_body = email_result["body"]
                     email_count += 1
 
-                    # Auto-send via Gmail if credentials available
                     try:
                         from outreach.google_auth import send_email
 
@@ -438,7 +414,11 @@ async def daily_sweep(
                     resume_pdf=tailored_result.pdf_path or "",
                     email_subject=email_subject,
                     email_body=email_body,
-                    status="tailored",
+                    contact_email=best_contact.get("email", ""),
+                    linkedin_contact=linkedin_str,
+                    careers_page=careers_page,
+                    status="ongoing",
+                    is_yc=False,
                 )
 
         except Exception as e:
@@ -476,7 +456,6 @@ async def daily_sweep(
 
 @app.get("/download-pdf")
 async def download_pdf(path: str):
-    """Download a generated resume PDF."""
     full_path = Path(path)
     if not full_path.exists():
         raise HTTPException(status_code=404, detail="PDF not found")
@@ -514,7 +493,27 @@ async def sync_to_sheets():
     return {"ok": True, "synced": len(apps), "rows_updated": updated}
 
 
-# ── Startup ───────────────────────────────────────────────
+@app.post("/check-emails")
+async def check_emails():
+    """Check Gmail inbox for replies and auto-update application statuses."""
+    try:
+        result = await check_all_applications()
+
+        if settings.tracking_sheet_id:
+            try:
+                from outreach.google_auth import sync_to_sheet
+                conn = _get_db()
+                rows = conn.execute("SELECT * FROM applications ORDER BY created_at DESC").fetchall()
+                conn.close()
+                apps = [dict(r) for r in rows]
+                sync_to_sheet(settings.tracking_sheet_id, apps)
+            except Exception as e:
+                logger.warning(f"Sheet sync after email check skipped: {e}")
+
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Email check failed: {e}")
+
 
 if __name__ == "__main__":
     import uvicorn

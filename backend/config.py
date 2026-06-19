@@ -27,6 +27,8 @@ class Settings(BaseSettings):
 
     # ── Contact finding ──────────────────────────────────
     hunter_api_key: str = ""
+    google_search_api_key: str = ""  # Google Custom Search API key
+    google_cse_id: str = ""  # Google Custom Search Engine ID
 
     # ── Gmail / Google Sheets ────────────────────────────
     google_credentials_json: str = ""  # path to OAuth client secret JSON

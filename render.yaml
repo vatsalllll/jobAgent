@@ -36,3 +36,7 @@ services:
         sync: false
       - key: HUNTER_API_KEY
         sync: false
+      - key: GOOGLE_SEARCH_API_KEY
+        sync: false
+      - key: GOOGLE_CSE_ID
+        sync: false

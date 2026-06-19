@@ -72,13 +72,13 @@ async def scrape_yc_api_fallback(
     companies = data.get("companies", [])[:limit]
 
     for company in companies:
-        name = company.get("name", "")
-        website = company.get("website", "")
-        locations = company.get("locations", [])
-        regions = company.get("regions", [])
-        batch = company.get("batch", "")
-        one_liner = company.get("oneLiner", "")
-        team_size = company.get("teamSize", 0)
+        name = (company.get("name") or "").strip()
+        website = (company.get("website") or "").strip()
+        locations = company.get("locations") or []
+        regions = company.get("regions") or []
+        batch = company.get("batch") or ""
+        one_liner = company.get("oneLiner") or ""
+        team_size = company.get("teamSize") or 0
 
         if not name or not website:
             continue

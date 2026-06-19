@@ -25,7 +25,10 @@ def _get_db() -> sqlite3.Connection:
             email_subject TEXT,
             email_body TEXT,
             contact_email TEXT,
+            linkedin_contact TEXT,
+            careers_page TEXT,
             status TEXT DEFAULT 'discovered',
+            is_yc INTEGER DEFAULT 0,
             applied_date TEXT,
             response_date TEXT,
             follow_up_date TEXT,
@@ -60,23 +63,35 @@ def log_application(
     resume_pdf: str = "",
     email_subject: str = "",
     email_body: str = "",
+    contact_email: str = "",
+    linkedin_contact: str = "",
+    careers_page: str = "",
     status: str = "discovered",
+    is_yc: bool = False,
+    notes: str = "",
 ) -> None:
     now = datetime.now(timezone.utc).isoformat()
     conn = _get_db()
     conn.execute("""
         INSERT INTO applications (id, company, role, location, source, url, match_score,
-            resume_pdf, email_subject, email_body, status, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            resume_pdf, email_subject, email_body, contact_email, linkedin_contact, careers_page,
+            status, is_yc, notes, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             match_score = excluded.match_score,
             resume_pdf = COALESCE(excluded.resume_pdf, applications.resume_pdf),
             email_subject = COALESCE(excluded.email_subject, applications.email_subject),
             email_body = COALESCE(excluded.email_body, applications.email_body),
+            contact_email = COALESCE(excluded.contact_email, applications.contact_email),
+            linkedin_contact = COALESCE(excluded.linkedin_contact, applications.linkedin_contact),
+            careers_page = COALESCE(excluded.careers_page, applications.careers_page),
             status = excluded.status,
+            is_yc = excluded.is_yc,
+            notes = COALESCE(excluded.notes, applications.notes),
             updated_at = excluded.updated_at
     """, (job_id, company, role, location, source, url, match_score,
-          resume_pdf, email_subject, email_body, status, now, now))
+          resume_pdf, email_subject, email_body, contact_email, linkedin_contact, careers_page,
+          status, 1 if is_yc else 0, notes, now, now))
     conn.commit()
     conn.close()
 
@@ -98,7 +113,7 @@ def update_status(job_id: str, status: str, notes: str = "") -> None:
     updates = {"status": status, "updated_at": now}
     if status == "applied":
         updates["applied_date"] = now
-    elif status in ("responded", "rejected", "interview"):
+    elif status in ("responded", "rejected", "interview", "second_round"):
         updates["response_date"] = now
     if notes:
         updates["notes"] = notes
@@ -115,6 +130,9 @@ def get_dashboard() -> dict:
     by_status = conn.execute(
         "SELECT status, COUNT(*) as n FROM applications GROUP BY status"
     ).fetchall()
+    by_yc = conn.execute(
+        "SELECT is_yc, COUNT(*) as n FROM applications GROUP BY is_yc"
+    ).fetchall()
     recent = conn.execute(
         "SELECT * FROM applications ORDER BY updated_at DESC LIMIT 20"
     ).fetchall()
@@ -126,6 +144,7 @@ def get_dashboard() -> dict:
     return {
         "total_applications": total,
         "by_status": {row["status"]: row["n"] for row in by_status},
+        "by_yc": {"yc" if row["is_yc"] else "non_yc": row["n"] for row in by_yc},
         "recent": [dict(row) for row in recent],
         "recent_sweeps": [dict(row) for row in sweeps],
     }
@@ -147,8 +166,28 @@ def mark_emailed(job_id: str, contact_email: str = "") -> None:
     now = datetime.now(timezone.utc).isoformat()
     conn = _get_db()
     conn.execute(
-        "UPDATE applications SET emailed_at = ?, contact_email = ?, status = CASE WHEN status = 'discovered' OR status = 'tailored' THEN 'emailed' ELSE status END, updated_at = ? WHERE id = ?",
+        "UPDATE applications SET emailed_at = ?, contact_email = ?, status = CASE WHEN status = 'discovered' OR status = 'tailored' OR status = 'pending_manual_apply' THEN 'ongoing' ELSE status END, updated_at = ? WHERE id = ?",
         (now, contact_email, now, job_id),
     )
     conn.commit()
     conn.close()
+
+
+def get_pending_applications() -> list[dict]:
+    """Get applications that are awaiting manual apply (YC companies)."""
+    conn = _get_db()
+    rows = conn.execute(
+        "SELECT * FROM applications WHERE status = 'pending_manual_apply' ORDER BY created_at DESC"
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_ongoing_applications() -> list[dict]:
+    """Get applications with status 'ongoing' for email monitoring."""
+    conn = _get_db()
+    rows = conn.execute(
+        "SELECT * FROM applications WHERE status = 'ongoing' ORDER BY created_at DESC"
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]

@@ -11,6 +11,7 @@ SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/gmail.send",
     "https://www.googleapis.com/auth/gmail.readonly",
+    "https://www.googleapis.com/auth/gmail.modify",
 ]
 
 CREDS_PATH = Path(__file__).parent.parent / "data" / "google_credentials.json"
@@ -91,6 +92,9 @@ def _app_to_row(app: dict) -> list:
         app.get("contact_email", ""),
         app.get("url", ""),
         app.get("resume_pdf", ""),
+        "YES" if app.get("is_yc") else "NO",
+        app.get("linkedin_contact", ""),
+        app.get("careers_page", ""),
         app.get("emailed_at", "")[:10] if app.get("emailed_at") else "",
         app.get("notes", ""),
     ]
@@ -104,7 +108,8 @@ def sync_to_sheet(spreadsheet_id: str, applications: list[dict]) -> int:
 
     headers = [
         "Date", "Company", "Role", "Location", "Source", "Match Score",
-        "Email Subject", "Status", "Contact", "URL", "Resume PDF", "Emailed At", "Notes"
+        "Email Subject", "Status", "Contact", "URL", "Resume PDF",
+        "Is YC?", "LinkedIn Contact", "Careers Page", "Emailed At", "Notes"
     ]
 
     # Read existing data
