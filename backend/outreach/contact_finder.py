@@ -84,6 +84,20 @@ def _score_contact(contact: dict) -> int:
     return score
 
 
+ATS_DOMAINS = [
+    "ashbyhq.com", "greenhouse.io", "boards.greenhouse.io",
+    "lever.co", "jobs.lever.co", "myworkdayjobs.com",
+    "workatastartup.com", "angel.co", "wellfound.com",
+    " workable.com", "smartrecruiters.com", "applytojob.com",
+    "breezy.hr", "recruitee.com", "apply.workable.com",
+]
+
+
+def _is_ats_domain(domain: str) -> bool:
+    domain_lower = (domain or "").lower()
+    return any(ats in domain_lower for ats in ATS_DOMAINS)
+
+
 async def find_company_domain(company_name: str, company_url: str = "") -> str:
     clean = (company_name or "").lower().strip()
     clean = re.sub(r"\s*\([^)]*\)", "", clean)
@@ -91,19 +105,21 @@ async def find_company_domain(company_name: str, company_url: str = "") -> str:
 
     if company_url:
         parsed = urlparse(company_url)
-        netloc = parsed.netloc or parsed.path.split("/")[0] if parsed.path else ""
-        netloc = netloc.replace("www.", "")
-        ats_domains = ["ashbyhq.com", "greenhouse.io", "boards.greenhouse.io",
-                       "lever.co", "jobs.lever.co", "myworkdayjobs.com",
-                       "workatastartup.com", "angel.co", "wellfound.com"]
-        if not any(ats in netloc for ats in ats_domains) and "." in netloc:
+        netloc = parsed.netloc
+        if not netloc and parsed.path:
+            netloc = parsed.path.split("/")[0]
+        netloc = netloc.replace("www.", "") if netloc else ""
+        if netloc and not _is_ats_domain(netloc) and "." in netloc:
             return netloc
 
     for known_domain in COMMON_DOMAINS:
         if clean in known_domain or known_domain.startswith(clean):
             return COMMON_DOMAINS[known_domain]
 
-    return f"{clean}.com"
+    guessed = f"{clean}.com"
+    if _is_ats_domain(guessed):
+        return ""
+    return guessed
 
 
 async def _find_yc_founders(company_name: str) -> list[dict]:
@@ -195,35 +211,38 @@ async def discover_company_info(company_name: str, company_url: str = "") -> dic
     linkedin_contacts = []
     careers_page = ""
 
-    for pattern in CONTACT_PATTERNS:
-        email = pattern.replace("{domain}", domain)
-        contacts.append({
-            "email": email,
-            "type": pattern.split("@{")[0],
-            "confidence": "low",
-            "source": "pattern",
-        })
+    safe_domain = domain if domain and not _is_ats_domain(domain) else ""
+
+    if safe_domain:
+        for pattern in CONTACT_PATTERNS:
+            email = pattern.replace("{domain}", safe_domain)
+            contacts.append({
+                "email": email,
+                "type": pattern.split("@{")[0],
+                "confidence": "low",
+                "source": "pattern",
+            })
 
     hunter_key = settings.hunter_api_key or ""
-    if hunter_key:
-        hunter_results = await _search_hunter(domain, hunter_key)
+    if hunter_key and safe_domain:
+        hunter_results = await _search_hunter(safe_domain, hunter_key)
         contacts = hunter_results + contacts
 
     yc_founders = await _find_yc_founders(company_name)
     if yc_founders:
         for f in yc_founders:
             if "@" not in f["email"]:
-                f["email"] = f"{f['email']}@{domain}"
+                f["email"] = f"{f['email']}@{safe_domain}" if safe_domain else f["{f['email']}@unknown.com"]
         contacts = yc_founders + contacts
 
     contacts.sort(key=_score_contact, reverse=True)
 
     if settings.google_search_api_key and settings.google_cse_id:
-        linkedin_contacts = await find_linkedin_contacts(company_name, domain)
+        linkedin_contacts = await find_linkedin_contacts(company_name, safe_domain)
         careers_page = await find_careers_page(company_name, company_url)
 
     return {
-        "domain": domain,
+        "domain": safe_domain,
         "contacts": contacts[:10],
         "linkedin_contacts": linkedin_contacts,
         "careers_page": careers_page,
@@ -239,6 +258,10 @@ def get_best_contact(contacts: list[dict]) -> dict:
 
     email = (best.get("email") or "").strip()
     if "@" not in email:
+        return {"email": "", "type": "unknown", "confidence": "none", "source": "none", "name": "", "position": ""}
+
+    domain_part = email.split("@")[1].lower()
+    if _is_ats_domain(domain_part):
         return {"email": "", "type": "unknown", "confidence": "none", "source": "none", "name": "", "position": ""}
 
     return {
