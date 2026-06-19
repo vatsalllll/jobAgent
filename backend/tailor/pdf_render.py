@@ -368,10 +368,15 @@ async def render_pdf_inline(resume: dict, output_path: Optional[str] = None) -> 
         safe_name = f"{company}_{role}".lower().replace(" ", "_")[:60]
         output_path = str(Path(settings.output_dir) / f"{safe_name}.pdf")
 
+    from tailor.latex_compiler import render_latex_pdf
+    result = render_latex_pdf(resume, output_path)
+    if result and Path(result).exists():
+        return result
+
     try:
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     except Exception:
-        output_path = f"/tmp/{safe_name}.pdf"
+        return ""
 
     try:
         from playwright.async_api import async_playwright
