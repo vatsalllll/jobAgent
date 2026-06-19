@@ -67,10 +67,7 @@ def get_gmail_service():
     return build("gmail", "v1", credentials=creds)
 
 
-def sync_to_sheet(spreadsheet_id: str, applications: list[dict]) -> int:
-    service = get_sheets_service()
-    sheet_name = "Applications"
-
+def _ensure_sheet(service, spreadsheet_id: str, sheet_name: str):
     spreadsheet = service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
     existing_sheets = [s["properties"]["title"] for s in spreadsheet.get("sheets", [])]
 
@@ -80,41 +77,78 @@ def sync_to_sheet(spreadsheet_id: str, applications: list[dict]) -> int:
             body={"requests": [{"addSheet": {"properties": {"title": sheet_name}}}]},
         ).execute()
 
-    headers = [
-        "Date", "Company", "Role", "Location", "Source", "Match Score",
-        "Email Subject", "Status", "Contact", "URL", "Resume PDF", "Notes"
+
+def _app_to_row(app: dict) -> list:
+    return [
+        app.get("created_at", "")[:10],
+        app.get("company", ""),
+        app.get("role", ""),
+        app.get("location", ""),
+        app.get("source", ""),
+        app.get("match_score", 0),
+        app.get("email_subject", ""),
+        app.get("status", ""),
+        app.get("contact_email", ""),
+        app.get("url", ""),
+        app.get("resume_pdf", ""),
+        app.get("emailed_at", "")[:10] if app.get("emailed_at") else "",
+        app.get("notes", ""),
     ]
 
-    values = [headers]
+
+def sync_to_sheet(spreadsheet_id: str, applications: list[dict]) -> int:
+    service = get_sheets_service()
+    sheet_name = "Applications"
+
+    _ensure_sheet(service, spreadsheet_id, sheet_name)
+
+    headers = [
+        "Date", "Company", "Role", "Location", "Source", "Match Score",
+        "Email Subject", "Status", "Contact", "URL", "Resume PDF", "Emailed At", "Notes"
+    ]
+
+    # Read existing data
+    result = service.spreadsheets().values().get(
+        spreadsheetId=spreadsheet_id,
+        range=f"'{sheet_name}'!A1:Z1000",
+    ).execute()
+    existing_rows = result.get("values", [])
+
+    # Ensure headers exist
+    if not existing_rows or existing_rows[0] != headers:
+        service.spreadsheets().values().update(
+            spreadsheetId=spreadsheet_id,
+            range=f"'{sheet_name}'!A1",
+            valueInputOption="RAW",
+            body={"values": [headers]},
+        ).execute()
+        existing_rows = [headers]
+
+    # Build set of existing company+role keys (column B + C, 1-indexed)
+    existing_keys = set()
+    for row in existing_rows[1:]:
+        if len(row) >= 3:
+            key = f"{row[1]}|{row[2]}"
+            existing_keys.add(key)
+
+    # Append only new applications
+    new_rows = []
     for app in applications:
-        values.append([
-            app.get("created_at", "")[:10],
-            app.get("company", ""),
-            app.get("role", ""),
-            app.get("location", ""),
-            app.get("source", ""),
-            app.get("match_score", 0),
-            app.get("email_subject", ""),
-            app.get("status", ""),
-            app.get("contact_email", ""),
-            app.get("url", ""),
-            app.get("resume_pdf", ""),
-            app.get("notes", ""),
-        ])
+        key = f"{app.get('company', '')}|{app.get('role', '')}"
+        if key not in existing_keys:
+            new_rows.append(_app_to_row(app))
+            existing_keys.add(key)
 
-    service.spreadsheets().values().clear(
-        spreadsheetId=spreadsheet_id,
-        range=f"'{sheet_name}'!A:Z",
-    ).execute()
+    if new_rows:
+        start_row = len(existing_rows) + 1
+        service.spreadsheets().values().update(
+            spreadsheetId=spreadsheet_id,
+            range=f"'{sheet_name}'!A{start_row}",
+            valueInputOption="RAW",
+            body={"values": new_rows},
+        ).execute()
 
-    result = service.spreadsheets().values().update(
-        spreadsheetId=spreadsheet_id,
-        range=f"'{sheet_name}'!A1",
-        valueInputOption="RAW",
-        body={"values": values},
-    ).execute()
-
-    return result.get("updatedRows", 0)
+    return len(new_rows)
 
 
 def send_email(to: str, subject: str, body: str, attachment_path: str = "") -> dict:

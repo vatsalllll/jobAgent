@@ -49,6 +49,12 @@ async def scrape_remoteok(max_age_days: int = 4, target_locations: Optional[list
             if not is_software:
                 continue
 
+            is_junior = any(kw in position_lower for kw in [
+                "intern", "junior", "associate", "new grad", "entry level", "entry-level", "university", "campus", "graduate", "apprentice", "co-op", "coop", "trainee", "fresher"
+            ]) and not any(s in position_lower for s in ["senior", "staff", "principal", "lead", "director", "head of", "manager", "vp", "architect", "sr.", "sr "])
+            if not is_junior:
+                continue
+
             posted = now
             if epoch:
                 try:

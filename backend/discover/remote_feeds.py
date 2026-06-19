@@ -47,6 +47,12 @@ async def scrape_weworkremotely(max_age_days: int = 14, target_locations: Option
             if not is_software:
                 continue
 
+            is_junior = any(kw in title_lower for kw in [
+                "intern", "junior", "associate", "new grad", "entry level", "entry-level", "university", "campus", "graduate", "apprentice", "co-op", "coop", "trainee", "fresher"
+            ]) and not any(s in title_lower for s in ["senior", "staff", "principal", "lead", "director", "head of", "manager", "vp", "architect", "sr.", "sr "])
+            if not is_junior:
+                continue
+
             posted = now
             if published:
                 try:
@@ -123,6 +129,12 @@ async def scrape_remotive(target_categories: Optional[list[str]] = None) -> list
                 "agent", "software", "mobile", "ios", "android", "web",
             ])
             if not is_software:
+                continue
+
+            is_junior = any(kw in title_lower for kw in [
+                "intern", "junior", "associate", "new grad", "entry level", "entry-level", "university", "campus", "graduate", "apprentice", "co-op", "coop", "trainee", "fresher"
+            ]) and not any(s in title_lower for s in ["senior", "staff", "principal", "lead", "director", "head of", "manager", "vp", "architect", "sr.", "sr "])
+            if not is_junior:
                 continue
 
             posted = now

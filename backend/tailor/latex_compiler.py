@@ -1,8 +1,3 @@
-"""
-LaTeX resume compiler — uses the user's LaTeX template format.
-Compiles via pdflatex (local), Docker texlive, or falls back to fpdf2.
-"""
-
 import subprocess
 import shutil
 import os
@@ -10,16 +5,15 @@ from pathlib import Path
 from typing import Optional
 from tempfile import mkdtemp
 
+import httpx
+
 from config import settings
+
+CLOUD_LATEX_URL = "https://latex.ytotech.com/builds/sync"
 
 
 def build_latex(resume: dict) -> str:
-    """
-    Build a complete .tex document from the tailored resume dict,
-    in the exact LaTeX format specified by the user.
-    """
     basics = resume.get("basics", {})
-
     selected_projects = resume.get("projects", [])[:3]
     selected_achievements = resume.get("achievements", [])
     selected_skills = resume.get("skills", {})
@@ -163,7 +157,6 @@ def build_latex(resume: dict) -> str:
 
 
 def _build_experience(work: list) -> str:
-    """Build experience bullets from the tailored resume."""
     lines = []
     for job in work[:1]:
         for h in job.get("highlights", [])[:5]:
@@ -172,7 +165,6 @@ def _build_experience(work: list) -> str:
 
 
 def _build_projects(projects: list) -> str:
-    """Build projects section from the tailored resume."""
     parts = []
     for i, proj in enumerate(projects):
         if i > 0:
@@ -183,21 +175,20 @@ def _build_projects(projects: list) -> str:
         tech = proj.get("tech", [])
         tech_str = " $|$ ".join(f"\\textbf{{{t}}}" for t in tech[:6])
 
-        parts.append(f"    \\resumeProjectHeading")
+        parts.append("    \\resumeProjectHeading")
         parts.append(f"      {{{name}}}{{\\clink{{{live}}}{{Live}} $|$ \\clink{{{github}}}{{GitHub}}}}")
-        parts.append(f"      \\resumeItemListStart")
+        parts.append("      \\resumeItemListStart")
         parts.append(f"        \\resumeItem{{\\textit{{Tech Stack:}} {tech_str}}}")
 
         for h in proj.get("highlights", [])[:3]:
             parts.append(f"        \\resumeItem{{{_escape_latex(h)}}}")
 
-        parts.append(f"      \\resumeItemListEnd")
+        parts.append("      \\resumeItemListEnd")
 
     return "\n".join(parts)
 
 
 def _build_achievements(achievements: list) -> str:
-    """Build achievements section — NEVER include Scaler references."""
     lines = []
     for a in achievements[:3]:
         title = _escape_latex(a.get("title", ""))
@@ -209,7 +200,6 @@ def _build_achievements(achievements: list) -> str:
 
 
 def _build_skills(skills: dict) -> str:
-    """Build skills section from the tailored resume."""
     lines = []
     for category, skill_list in skills.items():
         if isinstance(skill_list, list) and skill_list:
@@ -220,7 +210,6 @@ def _build_skills(skills: dict) -> str:
 
 
 def _escape_latex(text: str) -> str:
-    """Escape special LaTeX characters."""
     if not text:
         return ""
     text = str(text)
@@ -237,21 +226,10 @@ def _escape_latex(text: str) -> str:
     return text
 
 
-def compile_latex(tex_content: str, output_path: Optional[str] = None) -> str:
-    """
-    Compile LaTeX to PDF. Tries:
-    1. pdflatex (local install)
-    2. Docker texlive image
-    3. Falls back to fpdf2
-    """
-    if output_path is None:
-        output_path = str(Path(settings.output_dir) / "resume.pdf")
-
-    tmpdir = Path(mkdtemp())
+def _compile_local(tex_content: str, tmpdir: Path) -> Optional[Path]:
     tex_file = tmpdir / "resume.tex"
     tex_file.write_text(tex_content)
 
-    # Try local pdflatex
     pdflatex = shutil.which("pdflatex")
     if pdflatex:
         try:
@@ -260,15 +238,17 @@ def compile_latex(tex_content: str, output_path: Optional[str] = None) -> str:
                 capture_output=True, timeout=30, cwd=str(tmpdir),
             )
             pdf = tmpdir / "resume.pdf"
-            if pdf.exists():
-                Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy(pdf, output_path)
-                shutil.rmtree(tmpdir, ignore_errors=True)
-                return output_path
+            if pdf.exists() and pdf.stat().st_size > 1000:
+                return pdf
         except Exception:
             pass
+    return None
 
-    # Try Docker texlive
+
+def _compile_docker(tex_content: str, tmpdir: Path) -> Optional[Path]:
+    tex_file = tmpdir / "resume.tex"
+    tex_file.write_text(tex_content)
+
     docker = shutil.which("docker")
     if docker:
         try:
@@ -279,29 +259,57 @@ def compile_latex(tex_content: str, output_path: Optional[str] = None) -> str:
                 capture_output=True, timeout=60,
             )
             pdf = tmpdir / "resume.pdf"
-            if pdf.exists():
-                Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy(pdf, output_path)
-                shutil.rmtree(tmpdir, ignore_errors=True)
-                return output_path
+            if pdf.exists() and pdf.stat().st_size > 1000:
+                return pdf
         except Exception:
             pass
+    return None
+
+
+def _compile_cloud(tex_content: str, tmpdir: Path) -> Optional[Path]:
+    try:
+        resp = httpx.post(
+            CLOUD_LATEX_URL,
+            json={
+                "compiler": "pdflatex",
+                "resources": [{"main": True, "content": tex_content}],
+            },
+            timeout=60.0,
+        )
+        if resp.status_code in (200, 201):
+            pdf = tmpdir / "resume.pdf"
+            pdf.write_bytes(resp.content)
+            if pdf.stat().st_size > 1000:
+                return pdf
+    except Exception:
+        pass
+    return None
+
+
+def compile_latex(tex_content: str, output_path: Optional[str] = None) -> str:
+    if output_path is None:
+        output_path = str(Path(settings.output_dir) / "resume.pdf")
+
+    tmpdir = Path(mkdtemp())
+    pdf = None
+
+    pdf = _compile_local(tex_content, tmpdir)
+    if pdf is None:
+        pdf = _compile_docker(tex_content, tmpdir)
+    if pdf is None:
+        pdf = _compile_cloud(tex_content, tmpdir)
+
+    if pdf:
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(pdf, output_path)
+        shutil.rmtree(tmpdir, ignore_errors=True)
+        return output_path
 
     shutil.rmtree(tmpdir, ignore_errors=True)
-
-    # Fallback to fpdf2
-    from tailor.pdf_render import _render_pdf_fpdf2
-    return _render_pdf_fpdf2(resume_dict_from_last_call, output_path) if False else ""
-
-
-resume_dict_from_last_call = {}
+    return ""
 
 
 def render_latex_pdf(resume: dict, output_path: Optional[str] = None) -> str:
-    """Full pipeline: build LaTeX from resume dict → compile to PDF."""
-    global resume_dict_from_last_call
-    resume_dict_from_last_call = resume
-
     tex = build_latex(resume)
 
     if output_path is None:

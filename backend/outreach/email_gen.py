@@ -1,11 +1,3 @@
-"""
-Email generator — rewritten to follow user's exact prompt structure:
-1. Structured context block (match score, skills, angles)
-2. Personalized cold email (120-180 words, Opening→Fit→Evidence→Interest→CTA)
-3. 5 subject line options
-4. Optional referral version for engineers
-"""
-
 import json
 
 from config import settings
@@ -43,13 +35,14 @@ Return ONLY the JSON. No preamble."""
 
 EMAIL_PROMPT = """You are an experienced technical recruiter and career coach.
 
-Write a personalized cold email to a recruiter for a job opportunity.
+Write a personalized cold email to {recipient_role} for a job opportunity.
 The goal is to start a conversation and get a response — NOT to beg for a job.
 
 INPUTS:
 Candidate: {candidate_name} — CS student at BITS Pilani, graduating July 2026.
 Context summary: {context_summary}
-Recruiter: {recruiter_name}
+Recipient: {recipient_name}
+Recipient role: {recipient_role}
 Company: {company}
 Role: {job_title}
 
@@ -65,10 +58,12 @@ RULES:
 - Avoid: passionate, hardworking, team player, fast learner, eager, excited, thrilled.
 - Use evidence instead of claims.
 - Personalize the opening based on the context summary's company_signal.
-- If no recruiter info, use a role-focused opening.
+- Address the recipient by name if provided.
+- If writing to a founder, mention admiration for what they've built and why the mission resonates.
+- If writing to a recruiter, focus on fit and credentials.
 
 EMAIL STRUCTURE:
-Paragraph 1 — Opening: Personalized observation about company, team, product, or hiring need.
+Paragraph 1 — Opening: Personalized observation about company, team, product, or hiring need. Address recipient by name if known.
 Paragraph 2 — Fit: Connect 1-2 specific candidate experiences directly to role requirements.
 Paragraph 3 — Evidence + Interest: Mention a concrete achievement and explain why this company is interesting.
 Paragraph 4 — CTA: Low-friction ask (brief call, consideration, reply).
@@ -79,6 +74,35 @@ OUTPUT: Return valid JSON with these keys:
 {{
   "subject": "<best subject line, 4-8 words, includes role title, no clickbait>",
   "body": "<the email body, 120-180 words, plain text, 4 paragraphs separated by blank lines>"
+}}
+
+Return ONLY the JSON."""
+
+
+FOUNDER_EMAIL_PROMPT = """You are writing a cold email to a founder at a startup.
+
+The candidate is reaching out because they genuinely admire what the founder has built and see a strong fit with the team.
+
+INPUTS:
+Candidate: {candidate_name} — CS student at BITS Pilani, graduating July 2026.
+Context summary: {context_summary}
+Founder: {recipient_name}
+Company: {company}
+Role: {job_title}
+
+RULES:
+- Keep the email between 120-180 words.
+- Open with genuine admiration for what the founder has built — be specific.
+- Connect the candidate's background to the company's mission or technical stack.
+- Mention 1-2 concrete achievements that demonstrate ability to ship.
+- Never ask for a job directly. Ask for a conversation or consideration.
+- Avoid generic compliments. Reference something specific from the company_signal.
+- Tone: respectful, curious, confident. Not sycophantic.
+
+OUTPUT: Return valid JSON:
+{{
+  "subject": "<short subject, under 8 words, includes role or company name>",
+  "body": "<the email body, 120-180 words, plain text>"
 }}
 
 Return ONLY the JSON."""
@@ -102,40 +126,12 @@ Return valid JSON:
 }}"""
 
 
-REFERRAL_PROMPT = """You are an experienced engineer helping a junior reach out to another engineer.
-
-Write a short email to an engineer (NOT a recruiter) at {company}.
-The goal is to ask for advice or a technical perspective — NOT a job referral.
-
-INPUTS:
-Candidate: {candidate_name} — CS at BITS Pilani, graduating July 2026.
-Candidate context: {context_summary}
-Engineer: {recipient_name}
-Company: {company}
-Role interested in: {job_title}
-
-RULES:
-- Keep under 120 words.
-- Mention 1-2 common technical interests based on the context.
-- Ask ONE specific question about the team/tech/product.
-- Never directly ask "Can you refer me?".
-- Never ask for a job.
-- Be genuine — engineers respect directness.
-
-OUTPUT: Return valid JSON:
-{{
-  "subject": "<short subject, under 6 words>",
-  "body": "<the referral email, under 120 words, plain text>"
-}}"""
-
-
 async def build_context_block(
     job_title: str,
     company: str,
     job_description: str,
     base_resume: dict,
 ) -> dict:
-    """Step 1: Generate structured context analysis before writing the email."""
     llm = get_llm()
 
     profile = (
@@ -181,16 +177,15 @@ async def generate_outreach_email(
     tailored_resume: dict,
     recipient_name: str = "",
     recipient_role: str = "Hiring Team",
-    is_engineer: bool = False,
+    is_founder: bool = False,
 ) -> dict:
-    """Generate a personalized outreach email following the user's prompt structure."""
     llm = get_llm()
 
     context = await build_context_block(job_title, company, job_description, tailored_resume)
     context_summary = json.dumps(context, indent=2)
 
-    if is_engineer and recipient_name:
-        prompt = REFERRAL_PROMPT.format(
+    if is_founder and recipient_name:
+        prompt = FOUNDER_EMAIL_PROMPT.format(
             candidate_name=settings.sender_name,
             context_summary=context_summary,
             recipient_name=recipient_name,
@@ -201,7 +196,8 @@ async def generate_outreach_email(
         prompt = EMAIL_PROMPT.format(
             candidate_name=settings.sender_name,
             context_summary=context_summary,
-            recruiter_name=recipient_name or "Hiring Team",
+            recipient_name=recipient_name or "Hiring Team",
+            recipient_role=recipient_role,
             company=company,
             job_title=job_title,
         )
@@ -209,7 +205,7 @@ async def generate_outreach_email(
     response = await llm.generate(
         system_prompt="You are an experienced technical recruiter writing a cold outreach email. Return ONLY valid JSON.",
         user_prompt=prompt,
-        max_tokens=600 if is_engineer else 800,
+        max_tokens=800,
         temperature=0.5,
     )
 
@@ -217,13 +213,13 @@ async def generate_outreach_email(
     if result is None:
         text = response.strip()
         result = {
-            "subject": f"{job_title} — Vatsal Omar",
+            "subject": f"{job_title} — {settings.sender_name}",
             "body": text,
         }
 
     body = result.get("body", "")
     if len(body.split()) < 60:
-        body += "\n\nMy tailored resume is attached with further details."
+        body += f"\n\nMy tailored resume is attached with further details.\n\nBest,\n{settings.sender_name}"
     result["body"] = body
 
     return result
@@ -234,7 +230,6 @@ async def generate_subject_lines(
     company: str,
     context: dict,
 ) -> list[str]:
-    """Generate 5 subject line options."""
     llm = get_llm()
 
     prompt = SUBJECT_LINE_PROMPT.format(

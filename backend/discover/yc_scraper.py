@@ -49,7 +49,12 @@ async def scrape_yc_jobs(
         target_locations = ["Remote", "Bangalore", "Bengaluru", "Gurgaon", "Gurugram", "India"]
 
     if os.getenv("DISABLE_PLAYWRIGHT", "").lower() == "true":
-        return []  # Playwright not available in this environment
+        from discover.yc_api_fallback import scrape_yc_api_fallback
+        return await scrape_yc_api_fallback(
+            max_age_days=max_age_days,
+            min_salary_inr=min_salary_inr,
+            target_locations=target_locations,
+        )
 
     from playwright.async_api import async_playwright
 

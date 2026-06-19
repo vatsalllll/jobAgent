@@ -56,15 +56,13 @@ async def scrape_ashby_board(client: httpx.AsyncClient, board: str, target_locat
                 continue
 
         is_junior = any(kw in title_lower for kw in [
-            "intern", "junior", "associate", "new grad", "entry", "apprentice", " i"
-        ]) and "senior" not in title_lower
+            "intern", "junior", "associate", "new grad", "entry", "apprentice", " i ", " i/"
+        ]) and not any(s in title_lower for s in ["senior", "staff", "principal", "lead", "director", "head of", "manager", "vp", "architect"])
 
-        if is_junior:
-            seniority = "intern" if "intern" in title_lower else "junior"
-        elif "staff" in title_lower or "principal" in title_lower:
-            seniority = "senior"
-        else:
-            seniority = "mid"
+        if not is_junior:
+            continue
+
+        seniority = "intern" if "intern" in title_lower else "junior"
 
         apply_url = j.get("applyUrl") or j.get("jobUrl") or f"https://jobs.ashbyhq.com/{board}"
 

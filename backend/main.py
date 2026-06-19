@@ -285,25 +285,35 @@ async def daily_sweep(
     # 1. Discover jobs
     try:
         discovered = await discover_jobs(sources=sources)
-        # Interleave by source for diversity — avoids all-Ashby sweeps
+
+        source_counts = {}
+        for j in discovered.jobs:
+            source_counts[j.source] = source_counts.get(j.source, 0) + 1
+        logger.info(f"Daily sweep [{sweep_id}]: Source breakdown: {source_counts}")
+
+        # Prioritize YC first, then interleave remaining sources
         by_source: dict[str, list] = {}
         for j in discovered.jobs:
             by_source.setdefault(j.source, []).append(j)
-        interleaved = []
+
+        yc_jobs = by_source.pop("yc", [])
+        remaining = []
         max_per_source = max(len(v) for v in by_source.values()) if by_source else 0
         for i in range(max_per_source):
             for source_jobs in by_source.values():
                 if i < len(source_jobs):
-                    interleaved.append(source_jobs[i])
-        # Also deduplicate by company
-        seen_companies = set()
+                    remaining.append(source_jobs[i])
+
+        seen = set()
         deduped = []
-        for j in interleaved:
-            if j.company.lower() not in seen_companies:
-                seen_companies.add(j.company.lower())
+        for j in yc_jobs + remaining:
+            key = f"{j.company.lower()}|{j.title.lower()}"
+            if key not in seen:
+                seen.add(key)
                 deduped.append(j)
+
         jobs = deduped[:max_jobs]
-        logger.info(f"Daily sweep [{sweep_id}]: Found {len(jobs)} jobs to process (interleaved from {list(by_source.keys())})")
+        logger.info(f"Daily sweep [{sweep_id}]: Processing {len(jobs)} jobs (YC: {len([j for j in jobs if j.source == 'yc'])}, others: {len([j for j in jobs if j.source != 'yc'])})")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Job discovery failed: {e}")
 
@@ -365,26 +375,31 @@ async def daily_sweep(
                 email_body = ""
                 email_subject = ""
                 if generate_emails:
-                    email_result = await generate_email(EmailRequest(
+                    contacts = await discover_contact_emails(job.company, job.url)
+                    best = get_best_contact(contacts)
+                    recipient = best.get("email", "") if best.get("email") else settings.sender_email
+                    recipient_name = best.get("name", "") if best.get("name") else "Hiring Team"
+                    recipient_position = best.get("position", "") if best.get("position") else "Hiring Team"
+                    is_founder = any(k in recipient_position.lower() for k in ["founder", "ceo", "cto", "chief"])
+
+                    email_result = await generate_outreach_email(
                         job_title=job.title,
                         company=job.company,
                         job_description=job.description,
                         tailored_resume=tailored_result.tailored_resume,
-                    ))
-                    result_entry["email_subject"] = email_result.subject
-                    result_entry["email_body"] = email_result.body[:200]
-                    email_subject = email_result.subject
-                    email_body = email_result.body
+                        recipient_name=recipient_name,
+                        recipient_role=recipient_position,
+                        is_founder=is_founder,
+                    )
+                    result_entry["email_subject"] = email_result["subject"]
+                    result_entry["email_body"] = email_result["body"][:200]
+                    email_subject = email_result["subject"]
+                    email_body = email_result["body"]
                     email_count += 1
 
                     # Auto-send via Gmail if credentials available
                     try:
                         from outreach.google_auth import send_email
-
-                        contacts = await discover_contact_emails(job.company, job.url)
-                        best = get_best_contact(contacts, prefer_role="careers")
-                        recipient = best.get("email", "") if best.get("email") else settings.sender_email
-                        recipient_name = best.get("name", "") if best.get("name") else "Hiring Team"
 
                         full_body = f"{email_body}\n\n---\nApplied for: {job.title} at {job.company}\n{job.url}"
                         attachment = result_entry.get("pdf_path", "") or ""

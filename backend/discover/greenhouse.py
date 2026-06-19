@@ -96,8 +96,9 @@ async def scrape_greenhouse_board(
         if not any(kw in title_lower for kw in ROLE_KEYWORDS):
             continue
 
-        # Filter by seniority
-        if not any(kw in title_lower for kw in JUNIOR_KEYWORDS):
+        import re as _re
+        is_junior = any(_re.search(r'\b' + _re.escape(kw) + r'\b', title_lower) for kw in JUNIOR_KEYWORDS)
+        if not is_junior:
             continue
 
         # Location
