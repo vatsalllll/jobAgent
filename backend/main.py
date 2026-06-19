@@ -285,8 +285,25 @@ async def daily_sweep(
     # 1. Discover jobs
     try:
         discovered = await discover_jobs(sources=sources)
-        jobs = discovered.jobs[:max_jobs]
-        logger.info(f"Daily sweep [{sweep_id}]: Found {len(jobs)} jobs to process")
+        # Interleave by source for diversity — avoids all-Ashby sweeps
+        by_source: dict[str, list] = {}
+        for j in discovered.jobs:
+            by_source.setdefault(j.source, []).append(j)
+        interleaved = []
+        max_per_source = max(len(v) for v in by_source.values()) if by_source else 0
+        for i in range(max_per_source):
+            for source_jobs in by_source.values():
+                if i < len(source_jobs):
+                    interleaved.append(source_jobs[i])
+        # Also deduplicate by company
+        seen_companies = set()
+        deduped = []
+        for j in interleaved:
+            if j.company.lower() not in seen_companies:
+                seen_companies.add(j.company.lower())
+                deduped.append(j)
+        jobs = deduped[:max_jobs]
+        logger.info(f"Daily sweep [{sweep_id}]: Found {len(jobs)} jobs to process (interleaved from {list(by_source.keys())})")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Job discovery failed: {e}")
 

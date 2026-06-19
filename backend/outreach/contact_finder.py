@@ -102,12 +102,21 @@ async def _search_hunter(domain: str, api_key: str) -> list[dict]:
 
 
 def get_best_contact(contacts: list[dict], prefer_role: str = "hiring") -> dict:
+    # Priority 1: High-confidence Hunter.io personal emails
     for c in contacts:
-        if c.get("type") == prefer_role or prefer_role in c.get("email", ""):
+        if c.get("confidence") == "high" and c.get("source") == "hunter":
             return c
+    # Priority 2: Any Hunter result (medium confidence)
     for c in contacts:
-        if c.get("confidence") == "high":
+        if c.get("source") == "hunter":
             return c
+    # Priority 3: Specific pattern types before generic ones
+    pattern_order = ["hiring", "recruiting", "talent", "founders", "careers", "jobs", "team", "work", "hello"]
+    for pat in pattern_order:
+        for c in contacts:
+            if c.get("email", "").startswith(pat) or c.get("type") == pat:
+                return c
+    # Fallback
     if contacts:
         return contacts[0]
     return {"email": "", "type": "unknown", "confidence": "none", "source": "none"}

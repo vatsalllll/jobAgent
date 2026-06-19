@@ -34,3 +34,5 @@ services:
         sync: false
       - key: GOOGLE_REFRESH_TOKEN
         sync: false
+      - key: HUNTER_API_KEY
+        sync: false
