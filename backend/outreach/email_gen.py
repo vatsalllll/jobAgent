@@ -201,7 +201,7 @@ async def generate_outreach_email(
         prompt = EMAIL_PROMPT.format(
             candidate_name=settings.sender_name,
             context_summary=context_summary,
-            recipient_name=recipient_name or "Hiring Team",
+            recruiter_name=recipient_name or "Hiring Team",
             company=company,
             job_title=job_title,
         )
