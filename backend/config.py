@@ -39,6 +39,9 @@ class Settings(BaseSettings):
     sender_email: str = "vatsalomar1@gmail.com"
     sender_name: str = "Vatsal Omar"
 
+    # ── API Auth ─────────────────────────────────────────
+    api_key: str = ""
+
     # ── Job filters ──────────────────────────────────────
     min_salary_inr: int = 50_000
     max_listing_age_days: int = 4

@@ -40,3 +40,5 @@ services:
         sync: false
       - key: GOOGLE_CSE_ID
         sync: false
+      - key: API_KEY
+        sync: false

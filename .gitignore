@@ -3,6 +3,9 @@
 *.pickle
 google_credentials.json
 google_token.json
+backend/data/google_credentials.json
+backend/data/google_token.json
+backend/data/google_token.pickle
 
 # Python
 __pycache__/

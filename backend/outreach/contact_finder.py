@@ -7,6 +7,7 @@ import httpx
 
 from config import settings
 from outreach.google_search import find_linkedin_contacts, find_careers_page
+from outreach.contact_discovery_free import find_contacts_free
 
 COMMON_DOMAINS = {
     "stripe.com": "stripe.com", "notion.so": "notion.so", "figma.com": "figma.com",
@@ -88,7 +89,7 @@ ATS_DOMAINS = [
     "ashbyhq.com", "greenhouse.io", "boards.greenhouse.io",
     "lever.co", "jobs.lever.co", "myworkdayjobs.com",
     "workatastartup.com", "angel.co", "wellfound.com",
-    " workable.com", "smartrecruiters.com", "applytojob.com",
+    "workable.com", "smartrecruiters.com", "applytojob.com",
     "breezy.hr", "recruitee.com", "apply.workable.com",
 ]
 
@@ -232,8 +233,12 @@ async def discover_company_info(company_name: str, company_url: str = "") -> dic
     if yc_founders:
         for f in yc_founders:
             if "@" not in f["email"]:
-                f["email"] = f"{f['email']}@{safe_domain}" if safe_domain else f["{f['email']}@unknown.com"]
+                f["email"] = f"{f['email']}@{safe_domain}" if safe_domain else f"{f['email']}@unknown.com"
         contacts = yc_founders + contacts
+
+    free_contacts = await find_contacts_free(company_name, safe_domain)
+    if free_contacts:
+        contacts = free_contacts + contacts
 
     contacts.sort(key=_score_contact, reverse=True)
 

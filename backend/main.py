@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Header, Depends
 from fastapi.responses import JSONResponse, FileResponse
 from pydantic import BaseModel, Field
 
@@ -19,11 +19,14 @@ from discover.ashby_api import scrape_ashby_all
 from discover.remoteok import scrape_remoteok
 from discover.remote_feeds import scrape_weworkremotely, scrape_remotive
 from discover.turing_upwork import scrape_upwork_rss, scrape_turing
+from discover.hackernews import scrape_hackernews_jobs
+from discover.indeed_rss import scrape_indeed_jobs
 from discover.models import JobListing, DiscoveredJobs, TailoredResume, OutreachEmail
 from tailor.claude_tailor import tailor_resume, score_match, verify_fidelity
 from tailor.pdf_render import render_pdf_inline
 from outreach.email_gen import generate_outreach_email
-from outreach.contact_finder import discover_company_info, get_best_contact
+from outreach.contact_finder import discover_company_info, get_best_contact, _is_ats_domain
+from outreach.email_verify import verify_email_before_send
 from outreach.email_monitor import check_all_applications
 from outreach.tracker import log_application, log_sweep, get_dashboard as tracker_dashboard, _get_db, mark_emailed, was_emailed_recently
 
@@ -35,6 +38,13 @@ app = FastAPI(
     description="AI-powered job application automation agent. Discovers jobs, tailors resumes, generates outreach emails.",
     version="1.1.0",
 )
+
+
+async def verify_api_key(x_api_key: str = Header(default="")) -> None:
+    if not settings.api_key:
+        raise HTTPException(status_code=401, detail="API_KEY not configured. Set it in .env to protect this endpoint.")
+    if x_api_key != settings.api_key:
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
 
 class TailorRequest(BaseModel):
@@ -128,6 +138,16 @@ async def discover_jobs(
         tasks.append(("upwork", scrape_upwork_rss()))
     if "turing" in source_list:
         tasks.append(("turing", scrape_turing()))
+    if "hackernews" in source_list:
+        tasks.append(("hackernews", scrape_hackernews_jobs(
+            max_age_days=max_age_days,
+            target_locations=settings.target_locations,
+        )))
+    if "indeed" in source_list:
+        tasks.append(("indeed", scrape_indeed_jobs(
+            max_age_days=max_age_days,
+            target_locations=settings.target_locations,
+        )))
 
     for source_name, coro in tasks:
         try:
@@ -227,7 +247,7 @@ async def generate_email(request: EmailRequest):
 
 @app.post("/daily-sweep", response_model=DailySweepResponse)
 async def daily_sweep(
-    sources: str = "yc,greenhouse,github,lever,ashby,remoteok,weworkremotely,remotive",
+    sources: str = "yc,greenhouse,github,lever,ashby,remoteok,weworkremotely,remotive,hackernews,indeed",
     max_jobs: int = 10,
     tailor: bool = True,
     generate_emails: bool = True,
@@ -354,7 +374,7 @@ async def daily_sweep(
                 email_body = ""
                 email_subject = ""
                 if generate_emails:
-                    recipient = best_contact.get("email", "") if best_contact.get("email") else settings.sender_email
+                    recipient = best_contact.get("email", "") or ""
                     recipient_name = best_contact.get("name", "") if best_contact.get("name") else "Hiring Team"
                     recipient_position = best_contact.get("position", "") if best_contact.get("position") else "Hiring Team"
                     is_founder = any(k in recipient_position.lower() for k in ["founder", "ceo", "cto", "chief"])
@@ -374,35 +394,57 @@ async def daily_sweep(
                     email_body = email_result["body"]
                     email_count += 1
 
-                    try:
-                        from outreach.google_auth import send_email
-
-                        full_body = f"{email_body}\n\n---\nApplied for: {job.title} at {job.company}\n{job.url}"
-                        attachment = result_entry.get("pdf_path", "") or ""
-                        attachment_arg = ""
-                        if attachment:
-                            pdf_path = Path(attachment)
-                            if not pdf_path.is_absolute():
-                                pdf_path = Path(__file__).parent / attachment
-                                if not pdf_path.exists():
-                                    pdf_path = Path(settings.output_dir) / Path(attachment).name
-                            if pdf_path.exists():
-                                attachment_arg = str(pdf_path)
-                                logger.info(f"Attaching PDF: {attachment_arg} ({pdf_path.stat().st_size} bytes)")
-                            else:
-                                logger.warning(f"PDF not found: tried {pdf_path}")
+                    if not recipient:
+                        logger.warning(f"No valid contact email for {job.company} — skipping send, logged as missing_contact")
+                        result_entry["email_sent"] = False
+                        result_entry["contact_email"] = ""
+                    else:
+                        domain_part = recipient.split("@")[1].lower() if "@" in recipient else ""
+                        if _is_ats_domain(domain_part):
+                            logger.warning(f"Recipient {recipient} is an ATS domain — skipping send for {job.company}")
+                            result_entry["email_sent"] = False
+                            result_entry["contact_email"] = ""
+                        elif not verify_email_before_send(recipient):
+                            logger.warning(f"Email verification failed for {recipient} — skipping send for {job.company}")
+                            result_entry["email_sent"] = False
+                            result_entry["contact_email"] = ""
                         else:
+                            attachment = result_entry.get("pdf_path", "") or ""
                             attachment_arg = ""
+                            pdf_missing = False
+                            if attachment:
+                                pdf_path = Path(attachment)
+                                if not pdf_path.is_absolute():
+                                    pdf_path = Path(__file__).parent / attachment
+                                    if not pdf_path.exists():
+                                        pdf_path = Path(settings.output_dir) / Path(attachment).name
+                                if pdf_path.exists():
+                                    attachment_arg = str(pdf_path)
+                                    logger.info(f"Attaching PDF: {attachment_arg} ({pdf_path.stat().st_size} bytes)")
+                                else:
+                                    logger.error(f"PDF not found for {job.company}: tried {pdf_path} — skipping send")
+                                    pdf_missing = True
+                            else:
+                                logger.warning(f"No PDF generated for {job.company} — sending without attachment")
 
-                        send_email(recipient, email_subject, full_body, attachment_path=attachment_arg)
-                        mark_emailed(job.id, recipient)
+                            if pdf_missing:
+                                result_entry["email_sent"] = False
+                                result_entry["contact_email"] = ""
+                            else:
+                                try:
+                                    from outreach.google_auth import send_email
+                                    full_body = f"{email_body}\n\n---\nApplied for: {job.title} at {job.company}\n{job.url}"
+                                    send_email(recipient, email_subject, full_body, attachment_path=attachment_arg)
+                                    mark_emailed(job.id, recipient)
+                                    result_entry["email_sent"] = True
+                                    result_entry["contact_email"] = recipient
+                                    logger.info(f"Email sent to {recipient} for {job.company}" + (" (with PDF)" if attachment_arg else ""))
+                                except Exception as e:
+                                    logger.warning(f"Gmail send skipped for {job.company}: {e}")
+                                    result_entry["email_sent"] = False
+                                    result_entry["error"] = str(e)
 
-                        result_entry["email_sent"] = True
-                        result_entry["contact_email"] = recipient
-                        logger.info(f"Email sent to {recipient} for {job.company}" + (" (with PDF)" if attachment_arg else ""))
-                    except Exception as e:
-                        logger.warning(f"Gmail send skipped: {e}")
-
+                application_status = "ongoing" if best_contact.get("email") else "missing_contact"
                 log_application(
                     job_id=job.id,
                     company=job.company,
@@ -417,7 +459,7 @@ async def daily_sweep(
                     contact_email=best_contact.get("email", ""),
                     linkedin_contact=linkedin_str,
                     careers_page=careers_page,
-                    status="ongoing",
+                    status=application_status,
                     is_yc=False,
                 )
 
@@ -455,8 +497,11 @@ async def daily_sweep(
 
 
 @app.get("/download-pdf")
-async def download_pdf(path: str):
-    full_path = Path(path)
+async def download_pdf(path: str, _: None = Depends(verify_api_key)):
+    allowed_dir = Path(settings.output_dir).resolve()
+    full_path = Path(path).resolve()
+    if not str(full_path).startswith(str(allowed_dir)):
+        raise HTTPException(status_code=403, detail="Access denied: path outside allowed directory")
     if not full_path.exists():
         raise HTTPException(status_code=404, detail="PDF not found")
     return FileResponse(
@@ -467,7 +512,7 @@ async def download_pdf(path: str):
 
 
 @app.get("/dashboard")
-async def dashboard():
+async def dashboard(_: None = Depends(verify_api_key)):
     return tracker_dashboard()
 
 
