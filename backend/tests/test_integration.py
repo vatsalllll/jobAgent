@@ -131,6 +131,7 @@ class TestDailySweepIntegration:
                                             "match_score": 75,
                                             "pdf_path": "/tmp/test.pdf",
                                             "tailored_resume": {"basics": {"name": "Test"}},
+                                            "verification": {"is_faithful": True, "issues": []},
                                         })()
                                         mock_email.return_value = {"subject": "Test", "body": "Hello"}
                                         mock_info.return_value = {
@@ -142,7 +143,7 @@ class TestDailySweepIntegration:
                                         }
                                         mock_send.return_value = {"id": "msg123"}
 
-                                        response = client.post("/daily-sweep?sources=github&max_jobs=1&tailor=true&generate_emails=true")
+                                        response = client.post("/daily-sweep?sources=github&max_jobs=1&tailor=true&generate_emails=true", headers={"x-api-key": "test-api-key-123"})
                                         assert response.status_code == 200
                                         data = response.json()
                                         assert "sweep_id" in data
@@ -180,6 +181,7 @@ class TestDailySweepIntegration:
                                             "match_score": 75,
                                             "pdf_path": "/tmp/test.pdf",
                                             "tailored_resume": {"basics": {"name": "Test"}},
+                                            "verification": {"is_faithful": True, "issues": []},
                                         })()
                                         mock_email.return_value = {"subject": "Test", "body": "Hello"}
                                         # Force an ATS domain email through contact finder
@@ -191,7 +193,7 @@ class TestDailySweepIntegration:
                                             "careers_page": "",
                                         }
 
-                                        response = client.post("/daily-sweep?sources=github&max_jobs=1&tailor=true&generate_emails=true")
+                                        response = client.post("/daily-sweep?sources=github&max_jobs=1&tailor=true&generate_emails=true", headers={"x-api-key": "test-api-key-123"})
                                         assert response.status_code == 200
                                         # send_email should NOT have been called because ATS domain is blocked
                                         mock_send.assert_not_called()
@@ -227,6 +229,7 @@ class TestDailySweepIntegration:
                                             "match_score": 75,
                                             "pdf_path": "/tmp/test.pdf",
                                             "tailored_resume": {"basics": {"name": "Test"}},
+                                            "verification": {"is_faithful": True, "issues": []},
                                         })()
                                         mock_email.return_value = {"subject": "Test", "body": "Hello"}
                                         mock_info.return_value = {
@@ -237,7 +240,7 @@ class TestDailySweepIntegration:
                                             "careers_page": "",
                                         }
 
-                                        response = client.post("/daily-sweep?sources=github&max_jobs=1&tailor=true&generate_emails=true")
+                                        response = client.post("/daily-sweep?sources=github&max_jobs=1&tailor=true&generate_emails=true", headers={"x-api-key": "test-api-key-123"})
                                         assert response.status_code == 200
                                         mock_send.assert_not_called()
 

@@ -92,11 +92,12 @@ class TestAtsPreSendGuard:
             assert _is_ats_domain(domain), f"{domain} should be recognized as ATS"
 
     def test_ats_presend_check_exists_in_daily_sweep(self):
-        """daily_sweep should explicitly check recipient domain before calling send_email()."""
+        """daily_sweep must gate sends through should_send() (which, with get_best_contact,
+        filters ATS domains, guessed domains, and guessed personal addresses before sending)."""
         import inspect
         from main import daily_sweep
         source = inspect.getsource(daily_sweep)
-        assert "_is_ats_domain" in source, "ATS pre-send guard must be in daily_sweep"
+        assert "should_send" in source, "send-safety gate must be in daily_sweep"
 
 
 class TestPdfAttachmentSafety:

@@ -15,20 +15,24 @@ CAREERS_PATHS = [
     "/hiring", "/open-positions", "/positions", "/job-openings",
 ]
 
+# Unambiguous rejection phrases. NOTE: "thank you for your interest" was removed — it is a
+# common OPENING line in positive/scheduling emails too, and checking it first mislabeled
+# interview invites as rejections.
 REJECTION_KEYWORDS = [
-    "unfortunately", "not moving forward", "other candidates", "regret",
-    "decline", "not selected", "rejected", "not a fit", "not the right fit",
-    "decided to move forward with other candidates", "not proceeding",
-    "will not be moving forward", "thank you for your interest",
-    "position has been filled", "no longer under consideration",
+    "unfortunately", "not moving forward", "move forward with other candidates",
+    "regret to inform", "we regret", "decided not to", "not be moving forward",
+    "not selected", "not a fit", "not the right fit", "not proceeding",
+    "position has been filled", "role has been filled", "no longer under consideration",
+    "pursue other candidates", "decided to proceed with other",
 ]
 
 SECOND_ROUND_KEYWORDS = [
-    "interview", "schedule", "next step", "screening", "phone call",
-    "zoom", "calendar", "invite", "conversation", "discuss",
-    "follow-up", "second round", "next round", "hiring manager",
-    "technical interview", "chat", "meet", "assessment", "coding challenge",
-    "take-home", "pair programming", "system design", "onsite", "virtual onsite",
+    "interview", "schedule a", "next step", "screening call", "phone screen",
+    "zoom", "google meet", "calendar", "book a time", "your availability",
+    "set up a call", "hop on a call", "second round", "next round",
+    "hiring manager would like", "technical interview", "coding challenge",
+    "take-home", "pair programming", "system design round", "onsite", "virtual onsite",
+    "when are you free", "quick chat",
 ]
 
 
@@ -38,15 +42,23 @@ def _has_keywords(text: str, keywords: list[str]) -> bool:
 
 
 def classify_email(subject: str, body: str) -> str:
-    """Classify an email reply as rejected, second_round, or unknown."""
-    full_text = f"{subject} {body}"
+    """Classify a reply as rejected, second_round, or unknown.
 
-    if _has_keywords(full_text, REJECTION_KEYWORDS):
-        return "rejected"
+    Interview signals are checked BEFORE weak rejection cues, because positive emails
+    frequently open with polite boilerplate. A strong, unambiguous rejection phrase still
+    wins over an interview cue (handles "unfortunately we won't be interviewing you").
+    """
+    full_text = f"{subject}\n{body}".lower()
 
-    if _has_keywords(full_text, SECOND_ROUND_KEYWORDS):
+    strong_reject = _has_keywords(full_text, REJECTION_KEYWORDS)
+    interview = _has_keywords(full_text, SECOND_ROUND_KEYWORDS)
+
+    if interview and not strong_reject:
         return "second_round"
-
+    if strong_reject:
+        return "rejected"
+    if interview:
+        return "second_round"
     return "unknown"
 
 

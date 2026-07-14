@@ -21,14 +21,22 @@ from discover.remote_feeds import scrape_weworkremotely, scrape_remotive
 from discover.turing_upwork import scrape_upwork_rss, scrape_turing
 from discover.hackernews import scrape_hackernews_jobs
 from discover.indeed_rss import scrape_indeed_jobs
+from discover.smartrecruiters import scrape_smartrecruiters
+from discover.workable import scrape_workable
+from discover.recruitee import scrape_recruitee
+from discover.teamtailor import scrape_teamtailor
+from discover.themuse import scrape_themuse
+from discover.himalayas import scrape_himalayas
+from discover.adzuna import scrape_adzuna
+from discover.india_sitemaps import scrape_cutshort, scrape_hirist, scrape_foundit
 from discover.models import JobListing, DiscoveredJobs, TailoredResume, OutreachEmail
 from tailor.claude_tailor import tailor_resume, score_match, verify_fidelity
 from tailor.pdf_render import render_pdf_inline
 from outreach.email_gen import generate_outreach_email
-from outreach.contact_finder import discover_company_info, get_best_contact, _is_ats_domain
+from outreach.contact_finder import discover_company_info, get_best_contact, _is_ats_domain, should_send
 from outreach.email_verify import verify_email_before_send
 from outreach.email_monitor import check_all_applications
-from outreach.tracker import log_application, log_sweep, get_dashboard as tracker_dashboard, _get_db, mark_emailed, was_emailed_recently
+from outreach.tracker import log_application, log_sweep, get_dashboard as tracker_dashboard, _get_db, mark_emailed, was_emailed_recently, was_job_emailed
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -45,6 +53,17 @@ async def verify_api_key(x_api_key: str = Header(default="")) -> None:
         raise HTTPException(status_code=401, detail="API_KEY not configured. Set it in .env to protect this endpoint.")
     if x_api_key != settings.api_key:
         raise HTTPException(status_code=401, detail="Invalid or missing API key")
+
+
+def _resolve_pdf_path(attachment: str) -> str:
+    """Resolve a (possibly relative) tailored-PDF path to an absolute path, or '' if missing."""
+    if not attachment:
+        return ""
+    pdf_path = Path(attachment)
+    if not pdf_path.is_absolute():
+        candidate = Path(__file__).parent / attachment
+        pdf_path = candidate if candidate.exists() else Path(settings.output_dir) / Path(attachment).name
+    return str(pdf_path) if pdf_path.exists() else ""
 
 
 class TailorRequest(BaseModel):
@@ -90,7 +109,7 @@ async def health():
 
 @app.post("/discover-jobs", response_model=DiscoveredJobs)
 async def discover_jobs(
-    sources: str = "yc,greenhouse,github,lever,ashby",
+    sources: str = "yc,greenhouse,github,lever,ashby,smartrecruiters,workable,recruitee,teamtailor,themuse,himalayas,remoteok,remotive,weworkremotely,hackernews,cutshort,hirist,foundit",
     max_age_days: int = None,
     min_salary_inr: int = None,
 ):
@@ -117,7 +136,11 @@ async def discover_jobs(
             target_locations=settings.target_locations,
         )))
     if "github" in source_list:
-        tasks.append(("github", scrape_github()))
+        tasks.append(("github", scrape_github(
+            max_age_days=max_age_days,
+            target_locations=settings.target_locations,
+            min_salary_inr=min_salary_inr,
+        )))
     if "lever" in source_list:
         tasks.append(("lever", scrape_lever_all(
             max_age_days=max_age_days,
@@ -148,6 +171,26 @@ async def discover_jobs(
             max_age_days=max_age_days,
             target_locations=settings.target_locations,
         )))
+    # ── New free sources (ATS boards, aggregators, India) ──
+    _new_sources = {
+        "smartrecruiters": scrape_smartrecruiters,
+        "workable": scrape_workable,
+        "recruitee": scrape_recruitee,
+        "teamtailor": scrape_teamtailor,
+        "themuse": scrape_themuse,
+        "himalayas": scrape_himalayas,
+        "adzuna": scrape_adzuna,
+        "cutshort": scrape_cutshort,
+        "hirist": scrape_hirist,
+        "foundit": scrape_foundit,
+    }
+    for _name, _fn in _new_sources.items():
+        if _name in source_list:
+            tasks.append((_name, _fn(
+                max_age_days=max_age_days,
+                target_locations=settings.target_locations,
+                min_salary_inr=min_salary_inr,
+            )))
 
     for source_name, coro in tasks:
         try:
@@ -247,10 +290,11 @@ async def generate_email(request: EmailRequest):
 
 @app.post("/daily-sweep", response_model=DailySweepResponse)
 async def daily_sweep(
-    sources: str = "yc,greenhouse,github,lever,ashby,remoteok,weworkremotely,remotive,hackernews,indeed",
-    max_jobs: int = 10,
+    sources: str = "yc,greenhouse,github,lever,ashby,smartrecruiters,workable,recruitee,teamtailor,themuse,himalayas,remoteok,remotive,weworkremotely,hackernews,cutshort,hirist,foundit",
+    max_jobs: int = 12,
     tailor: bool = True,
     generate_emails: bool = True,
+    _: None = Depends(verify_api_key),
 ):
     sweep_id = f"sweep-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
     errors: list[str] = []
@@ -303,10 +347,23 @@ async def daily_sweep(
     email_count = 0
     skipped_dedup = 0
 
+    # Load the set of already-emailed job keys from the Google Sheet (persists across Render
+    # restarts, unlike the ephemeral SQLite) so we never email the same job description twice.
+    sheet_keys: set = set()
+    if settings.tracking_sheet_id:
+        try:
+            from outreach.google_auth import get_emailed_keys
+            sheet_keys = get_emailed_keys(settings.tracking_sheet_id)
+            logger.info(f"Loaded {len(sheet_keys)} already-emailed job keys from Sheet for dedup")
+        except Exception as e:
+            logger.warning(f"Could not load emailed keys from Sheet: {e}")
+
     for job in jobs:
         is_yc = job.source == "yc"
 
-        if not is_yc and was_emailed_recently(job.company, days=14):
+        # Per-JOB dedup (not per-company): the same posting is never emailed twice, but a
+        # different role at the same company is still allowed.
+        if not is_yc and was_job_emailed(job.id, job.url, job.company, job.title, sheet_keys):
             skipped_dedup += 1
             results.append({
                 "job_id": job.id,
@@ -315,7 +372,7 @@ async def daily_sweep(
                 "location": job.location,
                 "url": job.url,
                 "source": job.source,
-                "skipped": "already_emailed_within_14_days",
+                "skipped": "already_emailed_this_job",
             })
             continue
 
@@ -371,12 +428,25 @@ async def daily_sweep(
                 result_entry["pdf_path"] = tailored_result.pdf_path
                 tailored_count += 1
 
+                # FIDELITY GATE — never email a resume that failed fact-checking (fails closed).
+                verification = getattr(tailored_result, "verification", {}) or {}
+                is_faithful = bool(verification.get("is_faithful", False))
+                result_entry["fidelity_ok"] = is_faithful
+
+                # SEND GATE — only email a safe, deliverable contact on a real (non-guessed) domain.
+                domain_guessed = company_info.get("domain_guessed", False)
+                ok_to_send, send_reason = should_send(best_contact, domain_guessed)
+                recipient = best_contact.get("email", "") or ""
+
                 email_body = ""
                 email_subject = ""
+                application_status = "tailored"
+                result_entry["email_sent"] = False
+                result_entry["contact_email"] = ""
+
                 if generate_emails:
-                    recipient = best_contact.get("email", "") or ""
-                    recipient_name = best_contact.get("name", "") if best_contact.get("name") else "Hiring Team"
-                    recipient_position = best_contact.get("position", "") if best_contact.get("position") else "Hiring Team"
+                    recipient_name = best_contact.get("name") or "Hiring Team"
+                    recipient_position = best_contact.get("position") or "Hiring Team"
                     is_founder = any(k in recipient_position.lower() for k in ["founder", "ceo", "cto", "chief"])
 
                     email_result = await generate_outreach_email(
@@ -388,63 +458,42 @@ async def daily_sweep(
                         recipient_role=recipient_position,
                         is_founder=is_founder,
                     )
-                    result_entry["email_subject"] = email_result["subject"]
-                    result_entry["email_body"] = email_result["body"][:200]
                     email_subject = email_result["subject"]
                     email_body = email_result["body"]
+                    result_entry["email_subject"] = email_subject
+                    result_entry["email_body"] = email_body[:200]
                     email_count += 1
 
-                    if not recipient:
-                        logger.warning(f"No valid contact email for {job.company} — skipping send, logged as missing_contact")
-                        result_entry["email_sent"] = False
-                        result_entry["contact_email"] = ""
+                    if not is_faithful:
+                        result_entry["skipped_send"] = "fidelity_failed"
+                        application_status = "needs_review"
+                        logger.warning(f"Fidelity check failed for {job.company} — NOT sending. Issues: {verification.get('issues')}")
+                    elif not ok_to_send:
+                        result_entry["skipped_send"] = send_reason
+                        application_status = "missing_contact"
+                        logger.info(f"Not sending for {job.company}: {send_reason}")
+                    elif not verify_email_before_send(recipient):
+                        result_entry["skipped_send"] = "email_unverified_mx"
+                        application_status = "missing_contact"
+                        logger.warning(f"MX/verify failed for {recipient} — not sending for {job.company}")
                     else:
-                        domain_part = recipient.split("@")[1].lower() if "@" in recipient else ""
-                        if _is_ats_domain(domain_part):
-                            logger.warning(f"Recipient {recipient} is an ATS domain — skipping send for {job.company}")
-                            result_entry["email_sent"] = False
-                            result_entry["contact_email"] = ""
-                        elif not verify_email_before_send(recipient):
-                            logger.warning(f"Email verification failed for {recipient} — skipping send for {job.company}")
-                            result_entry["email_sent"] = False
-                            result_entry["contact_email"] = ""
-                        else:
-                            attachment = result_entry.get("pdf_path", "") or ""
-                            attachment_arg = ""
-                            pdf_missing = False
-                            if attachment:
-                                pdf_path = Path(attachment)
-                                if not pdf_path.is_absolute():
-                                    pdf_path = Path(__file__).parent / attachment
-                                    if not pdf_path.exists():
-                                        pdf_path = Path(settings.output_dir) / Path(attachment).name
-                                if pdf_path.exists():
-                                    attachment_arg = str(pdf_path)
-                                    logger.info(f"Attaching PDF: {attachment_arg} ({pdf_path.stat().st_size} bytes)")
-                                else:
-                                    logger.error(f"PDF not found for {job.company}: tried {pdf_path} — skipping send")
-                                    pdf_missing = True
-                            else:
-                                logger.warning(f"No PDF generated for {job.company} — sending without attachment")
+                        attachment_arg = _resolve_pdf_path(result_entry.get("pdf_path", "") or "")
+                        try:
+                            from outreach.google_auth import send_email
+                            full_body = f"{email_body}\n\n---\nApplied for: {job.title} at {job.company}\n{job.url}"
+                            send_email(recipient, email_subject, full_body, attachment_path=attachment_arg)
+                            mark_emailed(job.id, recipient)
+                            result_entry["email_sent"] = True
+                            result_entry["contact_email"] = recipient
+                            application_status = "ongoing"
+                            logger.info(f"Email sent to {recipient} for {job.company}" + (" (with PDF)" if attachment_arg else " (no PDF)"))
+                        except Exception as e:
+                            logger.warning(f"Gmail send failed for {job.company}: {e}")
+                            result_entry["error"] = str(e)
+                            application_status = "send_failed"
 
-                            if pdf_missing:
-                                result_entry["email_sent"] = False
-                                result_entry["contact_email"] = ""
-                            else:
-                                try:
-                                    from outreach.google_auth import send_email
-                                    full_body = f"{email_body}\n\n---\nApplied for: {job.title} at {job.company}\n{job.url}"
-                                    send_email(recipient, email_subject, full_body, attachment_path=attachment_arg)
-                                    mark_emailed(job.id, recipient)
-                                    result_entry["email_sent"] = True
-                                    result_entry["contact_email"] = recipient
-                                    logger.info(f"Email sent to {recipient} for {job.company}" + (" (with PDF)" if attachment_arg else ""))
-                                except Exception as e:
-                                    logger.warning(f"Gmail send skipped for {job.company}: {e}")
-                                    result_entry["email_sent"] = False
-                                    result_entry["error"] = str(e)
-
-                application_status = "ongoing" if best_contact.get("email") else "missing_contact"
+                # Record contact_email ONLY when actually sent, so dedup never treats an
+                # un-sent job as already-emailed.
                 log_application(
                     job_id=job.id,
                     company=job.company,
@@ -456,11 +505,12 @@ async def daily_sweep(
                     resume_pdf=tailored_result.pdf_path or "",
                     email_subject=email_subject,
                     email_body=email_body,
-                    contact_email=best_contact.get("email", ""),
+                    contact_email=(recipient if result_entry.get("email_sent") else ""),
                     linkedin_contact=linkedin_str,
                     careers_page=careers_page,
                     status=application_status,
                     is_yc=False,
+                    notes=(f"Best contact (not emailed): {best_contact.get('email')}" if not result_entry.get("email_sent") and best_contact.get("email") else ""),
                 )
 
         except Exception as e:
@@ -517,14 +567,14 @@ async def dashboard(_: None = Depends(verify_api_key)):
 
 
 @app.post("/track/{job_id}")
-async def update_tracking(job_id: str, status: str = "applied", notes: str = ""):
+async def update_tracking(job_id: str, status: str = "applied", notes: str = "", _: None = Depends(verify_api_key)):
     from outreach.tracker import update_status
     update_status(job_id, status, notes)
     return {"ok": True, "job_id": job_id, "status": status}
 
 
 @app.post("/sync-sheets")
-async def sync_to_sheets():
+async def sync_to_sheets(_: None = Depends(verify_api_key)):
     if not settings.tracking_sheet_id:
         raise HTTPException(status_code=400, detail="TRACKING_SHEET_ID not set in .env")
 
@@ -539,7 +589,7 @@ async def sync_to_sheets():
 
 
 @app.post("/check-emails")
-async def check_emails():
+async def check_emails(_: None = Depends(verify_api_key)):
     """Check Gmail inbox for replies and auto-update application statuses."""
     try:
         result = await check_all_applications()

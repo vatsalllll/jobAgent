@@ -86,10 +86,18 @@ class TestScoreContact:
         low = {"email": "john@company.com", "position": "Engineer", "type": "personal", "confidence": "low", "source": "hunter"}
         assert _score_contact(high) > _score_contact(low)
 
-    def test_personal_email_type_boosts_score(self):
-        personal = {"email": "john@company.com", "position": "", "type": "personal", "confidence": "low", "source": "pattern"}
-        generic = {"email": "careers@company.com", "position": "", "type": "careers", "confidence": "low", "source": "pattern"}
-        assert _score_contact(personal) > _score_contact(generic)
+    def test_verified_personal_beats_generic_pattern(self):
+        # A verified real personal contact must outrank a generic (guessed) role-address pattern.
+        verified_personal = {"email": "john@company.com", "position": "", "type": "personal", "confidence": "medium", "source": "github_public"}
+        generic_pattern = {"email": "careers@company.com", "position": "", "type": "careers", "confidence": "low", "source": "pattern"}
+        assert _score_contact(verified_personal) > _score_contact(generic_pattern)
+
+    def test_guessed_founder_does_not_beat_verified_email(self):
+        # Regression guard for the old inversion: a guessed YC-founder address must NOT
+        # outrank a real, verified personal email.
+        guessed_founder = {"email": "jane.doe@company.com", "position": "Founder", "type": "personal", "confidence": "medium", "source": "yc_api"}
+        verified = {"email": "jane@company.com", "position": "", "type": "personal", "confidence": "medium", "source": "github_public"}
+        assert _score_contact(verified) > _score_contact(guessed_founder)
 
     def test_founder_email_pattern_boosts_score(self):
         founder_email = {"email": "founder@company.com", "position": "", "type": "", "confidence": "low", "source": "pattern"}
@@ -182,9 +190,11 @@ class TestFindCompanyDomain:
         assert domain == "linear.com"
 
     @pytest.mark.asyncio
-    async def test_empty_company_name_returns_first_known_domain(self):
+    async def test_empty_company_name_returns_empty(self):
+        # An empty company name must NOT resolve to a real company's domain (old bug: it
+        # matched the first COMMON_DOMAINS entry, "stripe.com").
         domain = await find_company_domain("", "")
-        assert domain == "stripe.com"
+        assert domain == ""
 
     @pytest.mark.asyncio
     async def test_company_name_with_parens_stripped(self):

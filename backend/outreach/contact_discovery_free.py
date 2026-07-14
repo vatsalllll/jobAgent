@@ -10,6 +10,7 @@ All functions gracefully degrade when rate-limited or blocked.
 
 import asyncio
 import logging
+import os
 import re
 from typing import Optional
 
@@ -18,6 +19,23 @@ import httpx
 from outreach.email_verify import has_mx_record
 
 logger = logging.getLogger(__name__)
+
+
+def _gh_headers() -> dict:
+    """GitHub API headers, with auth when a token is available (60→5000 req/hr)."""
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "JobAgent/1.0",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    try:
+        from config import settings
+        token = os.getenv("GITHUB_TOKEN") or getattr(settings, "github_token", "")
+    except Exception:
+        token = os.getenv("GITHUB_TOKEN", "")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
 
 # Common email patterns for name → email inference
 EMAIL_PATTERNS = [
@@ -65,7 +83,7 @@ async def _github_search_users(company_name: str, max_results: int = 5) -> list[
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.get(
                 f"https://api.github.com/search/users?q={query}&per_page={max_results}",
-                headers={"Accept": "application/vnd.github.v3+json"},
+                headers=_gh_headers(),
             )
             if resp.status_code != 200:
                 return []
@@ -79,7 +97,7 @@ async def _github_search_users(company_name: str, max_results: int = 5) -> list[
                 # Fetch user profile for name and public email
                 user_resp = await client.get(
                     f"https://api.github.com/users/{login}",
-                    headers={"Accept": "application/vnd.github.v3+json"},
+                    headers=_gh_headers(),
                 )
                 if user_resp.status_code != 200:
                     continue
@@ -102,6 +120,71 @@ async def _github_search_users(company_name: str, max_results: int = 5) -> list[
         return []
 
 
+async def _github_commit_emails(company_name: str, domain: str, max_contacts: int = 5) -> list[dict]:
+    """Extract real developer emails from a company's public GitHub org commits.
+
+    Bounded to a handful of requests. Prefers commit-author emails whose domain matches
+    the company domain (strong verification signal); skips GitHub noreply addresses.
+    """
+    slug = re.sub(r"[^a-z0-9-]", "", company_name.lower().replace(" ", "-"))
+    if not slug:
+        return []
+
+    results: list[dict] = []
+    seen: set[str] = set()
+    try:
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+            repos_resp = await client.get(
+                f"https://api.github.com/orgs/{slug}/repos?sort=pushed&per_page=3",
+                headers=_gh_headers(),
+            )
+            if repos_resp.status_code != 200:
+                return []
+            repos = repos_resp.json()
+            if not isinstance(repos, list):
+                return []
+
+            for repo in repos[:3]:
+                full = repo.get("full_name")
+                if not full:
+                    continue
+                commits_resp = await client.get(
+                    f"https://api.github.com/repos/{full}/commits?per_page=20",
+                    headers=_gh_headers(),
+                )
+                if commits_resp.status_code != 200:
+                    continue
+                for c in commits_resp.json():
+                    commit = (c or {}).get("commit", {})
+                    author = commit.get("author", {}) or {}
+                    email = (author.get("email") or "").strip().lower()
+                    name = (author.get("name") or "").strip()
+                    if not email or "@" not in email or email in seen:
+                        continue
+                    if email.endswith("noreply.github.com") or "users.noreply" in email:
+                        continue
+                    email_domain = email.split("@")[1]
+                    # Only keep emails that plausibly belong to the company.
+                    if domain and email_domain != domain.lower():
+                        continue
+                    if not domain and not has_mx_record(email_domain):
+                        continue
+                    seen.add(email)
+                    results.append({
+                        "email": email,
+                        "name": name,
+                        "position": "",
+                        "source": "github_public",
+                        "type": "personal",
+                        "confidence": "medium",
+                    })
+                    if len(results) >= max_contacts:
+                        return results
+    except Exception as e:
+        logger.warning(f"GitHub commit-email lookup failed for {company_name}: {e}")
+    return results
+
+
 async def _scrape_team_page(domain: str) -> list[dict]:
     """Scrape company /about or /team page for employee names.
 
@@ -121,14 +204,12 @@ async def _scrape_team_page(domain: str) -> list[dict]:
                     resp = await client.get(url)
                     if resp.status_code != 200:
                         continue
-                    text = resp.text.lower()
-                    # Look for common team page patterns
-                    # e.g., "John Doe - CTO", "Jane Smith (Engineering)"
-                    # This is intentionally simple and will have false positives
+                    # Look for common team page patterns, e.g.
+                    # ">John Doe -", ">Jane Smith (", ">Alex Ng<"
+                    # Intentionally simple; will have false positives.
                     name_patterns = re.findall(
-                        r">([a-z]+\s+[a-z]+)\s*[-—(|<",
+                        r">\s*([A-Z][a-z]+\s+[A-Z][a-z]+)\s*[<(\-—|]",
                         resp.text,
-                        re.IGNORECASE,
                     )
                     for name in name_patterns[:5]:
                         clean_name = name.strip()
@@ -176,11 +257,15 @@ async def find_contacts_free(company_name: str, domain: str) -> list[dict]:
     """
     contacts = []
 
-    # GitHub (free, most reliable)
-    github_contacts = await _github_search_users(company_name)
-    contacts.extend(github_contacts)
+    # GitHub (free, most reliable) — profile emails + commit-author emails in parallel.
+    github_users, commit_emails = await asyncio.gather(
+        _github_search_users(company_name),
+        _github_commit_emails(company_name, domain),
+    )
+    contacts.extend(commit_emails)   # domain-matched real emails first
+    contacts.extend(github_users)
 
-    # Team page scraping (heuristic)
+    # Team page scraping (heuristic, low confidence)
     if domain:
         scraped = await _scrape_team_page(domain)
         contacts.extend(scraped)

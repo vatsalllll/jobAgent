@@ -68,6 +68,30 @@ BASE_RESUME = {
     ],
     "projects": [
         {
+            "name": "Samvaad — Voice-First Clinical Training Simulator",
+            "url": "https://github.com/siddham-jain/samvaad",
+            "description": (
+                "Real-time multimodal medical training simulator where the user is the doctor and "
+                "an AI is the patient. Take the history by voice, order labs/imaging, diagnose, and "
+                "prescribe in a 3D clinic; the patient converses in real time in six languages over "
+                "the Gemini Live API and an attending agent grades the encounter against clinical "
+                "guidelines. Built for the Google DeepMind Bangalore Hackathon (Real-Time Multimodal Interaction)."
+            ),
+            "tech": ["React 18", "TypeScript", "Three.js", "Gemini Live API", "FastAPI", "WebSockets", "Pydantic", "Zod"],
+            "highlights": [
+                "Built browser-direct real-time voice on the Gemini Live API — native-audio STT, dialogue, "
+                "and TTS in a single WebSocket — with barge-in/interruption handling and continuous 16 kHz "
+                "mic capture streamed to a scheduled 24 kHz playback queue.",
+                "Implemented multilingual patient personas (English, Hindi, Kannada, French, Spanish, German) "
+                "with live dual-side transcription driving on-screen subtitles and a lip-synced 3D face.",
+                "Engineered an attending-grader agent that scores encounters across three OSCE domains with "
+                "guideline citations constrained to a curated registry allowlist, using Pydantic response "
+                "schemas on the backend mirrored by Zod validation on the frontend.",
+                "Kept GEMINI_API_KEY server-side by minting single-use ephemeral Live tokens; authored ~240 "
+                "synthetic cases across 24 specialties with deterministic data-integrity and rubric-citation checks."
+            ]
+        },
+        {
             "name": "ChaosOps AI — Multi-Agent Incident Response Simulator",
             "url": "https://github.com/vatsalllll/chaosops-ai",
             "description": (

@@ -2,6 +2,7 @@ import os
 import json
 import pickle
 from pathlib import Path
+from typing import Optional
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -18,7 +19,16 @@ CREDS_PATH = Path(__file__).parent.parent / "data" / "google_credentials.json"
 TOKEN_PATH = Path(__file__).parent.parent / "data" / "google_token.pickle"
 
 
+_cached_creds: Optional[Credentials] = None
+
+
 def get_credentials() -> Credentials:
+    global _cached_creds
+    # Reuse a still-valid token instead of refreshing on every send/sync (avoids a
+    # network round-trip per email and Google rate limits).
+    if _cached_creds is not None and _cached_creds.valid:
+        return _cached_creds
+
     refresh_token = os.getenv("GOOGLE_REFRESH_TOKEN", "")
     client_id = os.getenv("GOOGLE_CLIENT_ID", "")
     client_secret = os.getenv("GOOGLE_CLIENT_SECRET", "")
@@ -32,7 +42,13 @@ def get_credentials() -> Credentials:
             client_secret=client_secret,
             scopes=SCOPES,
         )
-        creds.refresh(Request())
+        try:
+            creds.refresh(Request())
+        except Exception as e:
+            raise RuntimeError(
+                f"Google token refresh failed (revoked/expired refresh token?): {e}"
+            ) from e
+        _cached_creds = creds
         return creds
 
     creds = None
@@ -55,6 +71,7 @@ def get_credentials() -> Credentials:
         with open(TOKEN_PATH, "wb") as f:
             pickle.dump(creds, f)
 
+    _cached_creds = creds
     return creds
 
 
@@ -154,6 +171,39 @@ def sync_to_sheet(spreadsheet_id: str, applications: list[dict]) -> int:
         ).execute()
 
     return len(new_rows)
+
+
+def get_emailed_keys(spreadsheet_id: str) -> set:
+    """Read the tracking Sheet and return the set of dedup keys for jobs already emailed.
+
+    This is the persistence layer that survives Render's ephemeral disk: even after the
+    local SQLite is wiped, the Sheet remembers what was already contacted so we never
+    email the same job twice.
+    """
+    from outreach.tracker import emailed_keys_from_rows
+
+    try:
+        service = get_sheets_service()
+        result = service.spreadsheets().values().get(
+            spreadsheetId=spreadsheet_id,
+            range="'Applications'!A2:P5000",
+        ).execute()
+    except Exception:
+        return set()
+
+    rows = []
+    for r in result.get("values", []):
+        def col(i):
+            return r[i] if len(r) > i else ""
+        rows.append({
+            "company": col(1),
+            "role": col(2),
+            "status": col(7),
+            "contact_email": col(8),
+            "url": col(9),
+            "emailed_at": col(14),
+        })
+    return emailed_keys_from_rows(rows)
 
 
 def send_email(to: str, subject: str, body: str, attachment_path: str = "") -> dict:

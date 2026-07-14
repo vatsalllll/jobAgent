@@ -37,11 +37,22 @@ and production IoT/telematics systems. They are targeting junior-level and inter
 [INPUT — BASE RESUME (JSON Resume format)]
 {base_resume_json}
 
+[METHOD — do this before writing]
+1. Extract the job's TOP 8-10 requirements: the specific technologies, responsibilities, and
+   qualifications the JD emphasizes (read the exact words the JD uses).
+2. From the base resume, pick the work bullets, projects, and skills that BEST demonstrate those
+   specific requirements. Drop anything irrelevant to THIS role — a curated 1-page resume beats a
+   complete one.
+3. Rewrite the selected bullets to lead with the outcome and to mirror the JD's own terminology
+   (e.g. if the JD says "distributed systems", use that phrase where the base resume truthfully
+   supports it). Never invent — only rephrase what already exists.
+4. Order projects/experience by relevance to THIS JD, most relevant first.
+
 [GOAL]
 Produce a tailored version of the resume that:
 1. Passes ATS screening for this specific job (keyword alignment ≥85%)
 2. Makes a human recruiter want to interview the candidate
-3. Highlights the most relevant projects and experience for THIS role
+3. Highlights ONLY the most relevant projects and experience for THIS role, in relevance order
 4. Is honest — every claim is backed by the base resume
 
 [FORMAT]
@@ -89,7 +100,7 @@ Return valid JSON:
 
 
 VERIFICATION_PROMPT = """[ROLE]
-Fact-checker. Your job is to verify that a tailored resume contains NO fabricated information.
+Fact-checker for a tailored resume. Distinguish genuine FABRICATION from allowed TAILORING.
 
 [BASE RESUME — GROUND TRUTH]
 {base_resume_json}
@@ -97,17 +108,27 @@ Fact-checker. Your job is to verify that a tailored resume contains NO fabricate
 [TAILORED RESUME — TO VERIFY]
 {tailored_resume_json}
 
+[WHAT COUNTS AS FABRICATION — severity "fabrication" (these are NOT allowed)]
+- A skill, tool, project, employer, role, degree, or award that does NOT appear in the base resume.
+- A number/metric/date/percentage that was invented or made larger/better than the base resume states.
+- A claim of scope or seniority the base resume does not support.
+
+[WHAT IS ALLOWED — severity "rephrasing" (these are FINE, do NOT treat as fabrication)]
+- Rewording, summarizing, or using the job description's terminology for facts that ARE in the base resume.
+- Reordering, selecting a subset of, or OMITTING projects/bullets/skills.
+- Writing a new summary/label that only recombines information already present.
+
 [GOAL]
-Check every claim in the tailored resume against the base resume.
-Flag anything that was added, modified, or exaggerated.
+List only the DIFFERENCES you find, each tagged with its severity. Set is_faithful=false ONLY if
+there is at least one "fabrication". Rephrasing and omissions must NOT set is_faithful=false.
 
 [FORMAT]
-Return valid JSON:
+Return ONLY valid JSON:
 {{
   "is_faithful": true/false,
   "issues": [
-    {{"field": "path.to.field", "claim": "what was claimed", "issue": "why it's wrong"}}
+    {{"field": "path.to.field", "claim": "what the tailored resume says", "issue": "why", "severity": "fabrication" | "rephrasing"}}
   ]
 }}
 
-If no issues found, return is_faithful: true and empty issues list."""
+If nothing was added or inflated, return is_faithful: true and an empty issues list."""

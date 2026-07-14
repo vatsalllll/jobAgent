@@ -15,10 +15,24 @@ class Settings(BaseSettings):
     )
 
     # ── LLM ──────────────────────────────────────────────
+    # Provider preference (fallback chain): groq → gemini → openrouter → anthropic → openai → huggingface.
+    # Set LLM_PROVIDER to force a primary; the rest are used as automatic fallbacks.
     anthropic_api_key: str = ""
     claude_model: str = "claude-sonnet-4-5-20250514"
-    openai_api_key: str = ""  # optional, for swarm consensus
-    gemini_api_key: str = ""  # optional, for multi-model
+    openai_api_key: str = ""  # optional
+    gemini_api_key: str = ""  # free tier: https://aistudio.google.com/apikey
+    gemini_model: str = "gemini-2.5-flash"
+    groq_api_key: str = ""  # free tier: https://console.groq.com/keys
+    groq_model: str = "llama-3.3-70b-versatile"
+    openrouter_api_key: str = ""  # optional: https://openrouter.ai/keys
+    openrouter_model: str = "meta-llama/llama-3.3-70b-instruct:free"
+
+    # ── Free contact discovery ───────────────────────────
+    github_token: str = ""  # free PAT raises GitHub API 60→5000 req/hr
+
+    # ── Job source keys (all optional / free-tier) ───────
+    adzuna_app_id: str = ""
+    adzuna_app_key: str = ""
 
     # ── Hugging Face ─────────────────────────────────────
     hf_api_key: str = ""

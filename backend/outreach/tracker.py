@@ -1,5 +1,6 @@
 import sqlite3
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -148,6 +149,70 @@ def get_dashboard() -> dict:
         "recent": [dict(row) for row in recent],
         "recent_sweeps": [dict(row) for row in sweeps],
     }
+
+
+def _norm_url(url: str) -> str:
+    """Normalize a job URL for stable comparison across sweeps."""
+    u = (url or "").strip().lower()
+    u = re.sub(r"^https?://", "", u)
+    u = re.sub(r"^www\.", "", u)
+    u = u.split("?")[0].split("#")[0]
+    return u.rstrip("/")
+
+
+def job_dedup_keys(url: str = "", company: str = "", role: str = "") -> set[str]:
+    """Stable identity keys for a job posting: a normalized URL and a company|role key.
+
+    A job is 'the same' if EITHER key matches a previously-emailed job. This is what
+    guarantees we never email the same job description twice, while still allowing a
+    different role at the same company.
+    """
+    keys = set()
+    nu = _norm_url(url)
+    if nu:
+        keys.add(f"url::{nu}")
+    if company and role:
+        keys.add(f"cr::{company.strip().lower()}|{role.strip().lower()}")
+    return keys
+
+
+def was_job_emailed(job_id: str = "", url: str = "", company: str = "", role: str = "",
+                    sheet_keys: Optional[set] = None) -> bool:
+    """True if THIS specific job posting was already emailed.
+
+    Checks the persistent Google-Sheet keys (survive Render restarts) first, then the
+    local SQLite tracker. Per-JOB, not per-company.
+    """
+    if sheet_keys:
+        if job_dedup_keys(url, company, role) & sheet_keys:
+            return True
+    conn = _get_db()
+    try:
+        row = conn.execute(
+            """SELECT 1 FROM applications
+               WHERE emailed_at IS NOT NULL AND emailed_at != ''
+                 AND (id = ? OR (url != '' AND url = ?) OR (company = ? AND role = ?))
+               LIMIT 1""",
+            (job_id, url, company, role),
+        ).fetchone()
+    finally:
+        conn.close()
+    return row is not None
+
+
+def emailed_keys_from_rows(rows: list[dict]) -> set[str]:
+    """Build the set of dedup keys for rows that were already emailed (from SQLite or Sheet)."""
+    keys: set[str] = set()
+    for r in rows:
+        emailed = r.get("emailed_at") or r.get("Emailed At") or r.get("contact_email") or r.get("Contact")
+        status = (r.get("status") or r.get("Status") or "").lower()
+        if emailed or status in ("ongoing", "applied", "responded", "interview", "second_round", "rejected"):
+            keys |= job_dedup_keys(
+                r.get("url") or r.get("URL") or "",
+                r.get("company") or r.get("Company") or "",
+                r.get("role") or r.get("Role") or "",
+            )
+    return keys
 
 
 def was_emailed_recently(company: str, days: int = 14) -> bool:

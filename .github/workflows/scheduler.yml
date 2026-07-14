@@ -14,8 +14,9 @@ jobs:
       - name: Daily sweep — discover, tailor, email
         run: |
           echo "Triggering daily sweep..."
-          RESPONSE=$(curl -s -X POST "${{ secrets.RENDER_URL }}/daily-sweep?max_jobs=10&tailor=true&generate_emails=true" \
-            --max-time 300 \
+          RESPONSE=$(curl -s -X POST "${{ secrets.RENDER_URL }}/daily-sweep?max_jobs=12&tailor=true&generate_emails=true" \
+            -H "x-api-key: ${{ secrets.API_KEY }}" \
+            --max-time 600 \
             -w "\nHTTP_CODE:%{http_code}")
           echo "$RESPONSE"
           HTTP_CODE=$(echo "$RESPONSE" | grep "HTTP_CODE:" | cut -d: -f2)
@@ -29,9 +30,14 @@ jobs:
         run: |
           echo "Syncing to Google Sheets..."
           RESPONSE=$(curl -s -X POST "${{ secrets.RENDER_URL }}/sync-sheets" \
-            --max-time 60 \
+            -H "x-api-key: ${{ secrets.API_KEY }}" \
+            --max-time 120 \
             -w "\nHTTP_CODE:%{http_code}")
           echo "$RESPONSE"
+          HTTP_CODE=$(echo "$RESPONSE" | grep "HTTP_CODE:" | cut -d: -f2)
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "Sheet sync failed with HTTP $HTTP_CODE"
+          fi
           echo "Sync completed at $(date -u)"
 
   check-emails:
@@ -42,6 +48,7 @@ jobs:
         run: |
           echo "Checking email replies..."
           RESPONSE=$(curl -s -X POST "${{ secrets.RENDER_URL }}/check-emails" \
+            -H "x-api-key: ${{ secrets.API_KEY }}" \
             --max-time 120 \
             -w "\nHTTP_CODE:%{http_code}")
           echo "$RESPONSE"

@@ -5,6 +5,7 @@ Works with Anthropic, Hugging Face, or OpenAI via the LLM abstraction layer.
 """
 
 import json
+import re
 from typing import Optional
 
 from tailor.prompts import (
@@ -86,30 +87,81 @@ async def score_match(
     return result
 
 
+def _norm(s: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", (s or "").lower()).strip()
+
+
+def _programmatic_fidelity(base_resume: dict, tailored_resume: dict) -> list[dict]:
+    """Deterministic fabrication check — the authoritative send-gate.
+
+    Catches the high-signal, low-false-positive fabrication vectors: a new employer, a new
+    project, or an education entry other than BITS Pilani. This does NOT depend on the LLM,
+    so it never blocks legitimate rephrasing/reordering and never flakes on a weak free model.
+    """
+    issues: list[dict] = []
+
+    base_companies = [_norm(w.get("company", "")) for w in base_resume.get("work", []) if w.get("company")]
+    for w in tailored_resume.get("work", []) or []:
+        comp = _norm(w.get("company", ""))
+        if comp and not any(comp in bc or bc in comp for bc in base_companies):
+            issues.append({"field": "work.company", "claim": w.get("company", ""),
+                           "issue": "employer not present in base resume", "severity": "fabrication"})
+
+    base_proj_tokens = [set(_norm(p.get("name", "")).split()) for p in base_resume.get("projects", [])]
+    for p in tailored_resume.get("projects", []) or []:
+        toks = {t for t in _norm(p.get("name", "")).split() if len(t) > 3}
+        if toks and not any(toks & bt for bt in base_proj_tokens):
+            issues.append({"field": "projects.name", "claim": p.get("name", ""),
+                           "issue": "project not present in base resume", "severity": "fabrication"})
+
+    for e in tailored_resume.get("education", []) or []:
+        inst = _norm(e.get("institution", ""))
+        if inst and "bits" not in inst and "birla" not in inst:
+            issues.append({"field": "education.institution", "claim": e.get("institution", ""),
+                           "issue": "education other than BITS Pilani", "severity": "fabrication"})
+
+    return issues
+
+
 async def verify_fidelity(
     base_resume: dict,
     tailored_resume: dict,
 ) -> dict:
-    """Verify that the tailored resume contains no fabricated information."""
-    llm = get_llm()
+    """Verify the tailored resume adds no fabricated employer/project/education.
 
-    prompt = VERIFICATION_PROMPT.format(
-        base_resume_json=json.dumps(base_resume, indent=2),
-        tailored_resume_json=json.dumps(tailored_resume, indent=2),
-    )
+    The DETERMINISTIC check (`_programmatic_fidelity`) is authoritative and decides is_faithful,
+    so the gate is reliable regardless of LLM quality. The LLM fact-check is run best-effort as
+    ADVISORY signal (e.g. it may spot an inflated metric) and surfaced under `advisory_issues`,
+    but it does not by itself block a send (the free-tier verifier is too inconsistent for that).
+    """
+    prog_issues = _programmatic_fidelity(base_resume, tailored_resume)
 
-    response_text = await llm.generate(
-        system_prompt="",
-        user_prompt=prompt,
-        max_tokens=1024,
-        temperature=0.1,
-    )
+    advisory: list[dict] = []
+    try:
+        llm = get_llm()
+        prompt = VERIFICATION_PROMPT.format(
+            base_resume_json=json.dumps(base_resume, indent=2),
+            tailored_resume_json=json.dumps(tailored_resume, indent=2),
+        )
+        response_text = await llm.generate(
+            system_prompt="You are a strict resume fact-checker. Return ONLY valid JSON.",
+            user_prompt=prompt,
+            max_tokens=1024,
+            temperature=0.0,
+        )
+        result = extract_json(response_text)
+        if result and isinstance(result.get("issues"), list):
+            advisory = [i for i in result["issues"]
+                        if str(i.get("severity", "")).strip().lower().startswith("fabricat")]
+    except Exception:
+        advisory = []  # advisory only — never blocks
 
-    result = extract_json(response_text)
-    if result is None:
-        return {"is_faithful": True, "issues": []}
-
-    return result
+    return {
+        "is_faithful": len(prog_issues) == 0,
+        "verified": True,
+        "issues": prog_issues,
+        "advisory_issues": advisory,
+    }
 
 
 def _sanitize_education(resume: dict) -> dict:

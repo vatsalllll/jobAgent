@@ -8,13 +8,32 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
     envVars:
+      # Primary LLM = Groq (free, reliable). Falls back automatically to gemini → huggingface
+      # if GROQ_API_KEY is unset, so this is safe to leave as groq even before you add the key.
       - key: LLM_PROVIDER
-        value: huggingface
+        value: groq
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_MODEL
+        value: llama-3.3-70b-versatile
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash
+      # HuggingFace kept as a final fallback.
       - key: HF_MODEL
-        value: Qwen/Qwen3-32B
+        value: Qwen/Qwen3-8B
       - key: HF_PROVIDER
         value: groq
       - key: HF_API_KEY
+        sync: false
+      # Free PAT raises GitHub contact-discovery from 60 → 5000 req/hr.
+      - key: GITHUB_TOKEN
+        sync: false
+      # Optional: Adzuna (India + salary data). Source is skipped gracefully if unset.
+      - key: ADZUNA_APP_ID
+        sync: false
+      - key: ADZUNA_APP_KEY
         sync: false
       - key: TRACKING_SHEET_ID
         sync: false

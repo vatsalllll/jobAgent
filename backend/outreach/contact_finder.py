@@ -45,52 +45,81 @@ RECRUITER_TITLES = [
 ]
 
 
+# Sources whose email is a REAL, observed address (not a guess).
+VERIFIED_SOURCES = {"hunter", "github_public", "google", "linkedin"}
+# Sources whose email is a GUESS (permutation of a name) — high bounce risk.
+GUESSED_PERSONAL_SOURCES = {"yc_api", "team_page_scrape"}
+
+
+def _is_verified(contact: dict) -> bool:
+    source = (contact.get("source") or "").lower()
+    conf = (contact.get("confidence") or "low").lower()
+    if source == "hunter":
+        return conf in ("high", "medium")
+    return source in VERIFIED_SOURCES
+
+
 def _score_contact(contact: dict) -> int:
-    score = 0
+    """Rank contacts so that VERIFIED real emails always beat guessed ones, and
+    deliverable role-addresses on a known domain beat guessed personal addresses.
+
+    This fixes the prior inversion where a guessed `founders@` pattern or a guessed
+    YC-founder `first.last@` outranked a real, GitHub-verified personal email.
+    """
     position = (contact.get("position") or "").lower()
     email = (contact.get("email") or "").lower()
-    ctype = (contact.get("type") or "").lower()
-    confidence = contact.get("confidence") or "low"
-    source = contact.get("source") or ""
+    confidence = (contact.get("confidence") or "low").lower()
+    source = (contact.get("source") or "").lower()
 
-    if source == "hunter":
-        score += 20
+    if not email:
+        return 0
+    verified = _is_verified(contact)
+
+    # TIER 1 — verified real personal addresses. Title/confidence bonuses apply ONLY here,
+    # because ranking a *guess* by the person's title is what caused the old inversion.
+    if verified:
+        base = {"hunter": 25, "github_public": 22, "google": 18, "linkedin": 18}.get(source, 16)
+        bonus = 0
         if confidence == "high":
-            score += 10
+            bonus += 6
         elif confidence == "medium":
-            score += 5
+            bonus += 3
+        if any(t in position for t in FOUNDER_TITLES):
+            bonus += 6
+        elif any(t in position for t in RECRUITER_TITLES):
+            bonus += 5
+        if (contact.get("type") or "").lower() == "personal":
+            bonus += 2
+        return base + bonus
 
-    for title in FOUNDER_TITLES:
-        if title in position:
-            score += 15
-            break
+    # TIER 2 — deliverable role addresses on a real domain (low bounce risk).
+    if source == "pattern":
+        if any(p in email for p in ["hiring", "recruit", "talent"]):
+            return 10
+        if any(p in email for p in ["careers", "jobs"]):
+            return 8
+        if "founder" in email:
+            return 7
+        return 6  # team@ / hello@ / work@
 
-    for title in RECRUITER_TITLES:
-        if title in position:
-            score += 12
-            break
-
-    if ctype == "personal" or "personal" in email:
-        score += 8
-
-    if any(p in email for p in ["founder", "ceo", "cto"]):
-        score += 10
-    elif any(p in email for p in ["hiring", "recruit", "talent"]):
-        score += 8
-    elif any(p in email for p in ["careers", "jobs"]):
-        score += 4
-    elif "hello" in email or "team" in email:
-        score += 2
-
-    return score
+    # TIER 3 — guessed personal addresses (high bounce risk; should_send blocks these).
+    if source == "yc_api":
+        return 4
+    if source == "team_page_scrape":
+        return 2
+    return 1
 
 
 ATS_DOMAINS = [
     "ashbyhq.com", "greenhouse.io", "boards.greenhouse.io",
-    "lever.co", "jobs.lever.co", "myworkdayjobs.com",
+    "lever.co", "jobs.lever.co", "myworkdayjobs.com", "workday.com",
     "workatastartup.com", "angel.co", "wellfound.com",
     "workable.com", "smartrecruiters.com", "applytojob.com",
     "breezy.hr", "recruitee.com", "apply.workable.com",
+    "jobvite.com", "icims.com", "taleo.net", "bamboohr.com",
+    "jazz.co", "jazzhr.com", "teamtailor.com", "personio.de",
+    "join.com", "rippling.com", "ripplingats.com", "paylocity.com",
+    "successfactors.com", "eightfold.ai", "gh_jid", "avature.net",
 ]
 
 
@@ -99,7 +128,13 @@ def _is_ats_domain(domain: str) -> bool:
     return any(ats in domain_lower for ats in ATS_DOMAINS)
 
 
-async def find_company_domain(company_name: str, company_url: str = "") -> str:
+def _resolve_domain(company_name: str, company_url: str = "") -> tuple[str, str]:
+    """Return (domain, origin) where origin is 'url' | 'known' | 'guessed' | ''.
+
+    Origin lets callers decide whether the domain is trustworthy enough to email:
+    'url' and 'known' are real; 'guessed' is a {name}.com guess and must NOT be
+    auto-emailed (it may belong to an unrelated company).
+    """
     clean = (company_name or "").lower().strip()
     clean = re.sub(r"\s*\([^)]*\)", "", clean)
     clean = re.sub(r"[^a-z0-9]", "", clean)
@@ -111,16 +146,22 @@ async def find_company_domain(company_name: str, company_url: str = "") -> str:
             netloc = parsed.path.split("/")[0]
         netloc = netloc.replace("www.", "") if netloc else ""
         if netloc and not _is_ats_domain(netloc) and "." in netloc:
-            return netloc
+            return netloc, "url"
 
     for known_domain in COMMON_DOMAINS:
-        if clean in known_domain or known_domain.startswith(clean):
-            return COMMON_DOMAINS[known_domain]
+        if clean and (clean in known_domain or known_domain.startswith(clean)):
+            return COMMON_DOMAINS[known_domain], "known"
 
+    if not clean:
+        return "", ""
     guessed = f"{clean}.com"
     if _is_ats_domain(guessed):
-        return ""
-    return guessed
+        return "", ""
+    return guessed, "guessed"
+
+
+async def find_company_domain(company_name: str, company_url: str = "") -> str:
+    return _resolve_domain(company_name, company_url)[0]
 
 
 async def _find_yc_founders(company_name: str) -> list[dict]:
@@ -206,13 +247,14 @@ async def discover_company_info(company_name: str, company_url: str = "") -> dic
             "careers_page": "",
         }
 
-    domain = await find_company_domain(company_name, company_url)
+    domain, domain_origin = _resolve_domain(company_name, company_url)
 
     contacts = []
     linkedin_contacts = []
     careers_page = ""
 
     safe_domain = domain if domain and not _is_ats_domain(domain) else ""
+    domain_guessed = domain_origin == "guessed"
 
     if safe_domain:
         for pattern in CONTACT_PATTERNS:
@@ -248,6 +290,8 @@ async def discover_company_info(company_name: str, company_url: str = "") -> dic
 
     return {
         "domain": safe_domain,
+        "domain_origin": domain_origin,
+        "domain_guessed": domain_guessed,
         "contacts": contacts[:10],
         "linkedin_contacts": linkedin_contacts,
         "careers_page": careers_page,
@@ -258,16 +302,22 @@ def get_best_contact(contacts: list[dict]) -> dict:
     if not contacts:
         return {"email": "", "type": "unknown", "confidence": "none", "source": "none", "name": "", "position": ""}
 
-    sorted_contacts = sorted(contacts, key=_score_contact, reverse=True)
-    best = sorted_contacts[0]
+    # Keep only usable contacts (real address, non-ATS domain) BEFORE picking the best,
+    # so an ATS-domain top-scorer doesn't cause us to discard a perfectly good non-ATS one.
+    usable = []
+    for c in contacts:
+        e = (c.get("email") or "").strip()
+        if "@" not in e:
+            continue
+        if _is_ats_domain(e.split("@")[1].lower()):
+            continue
+        usable.append(c)
 
+    if not usable:
+        return {"email": "", "type": "unknown", "confidence": "none", "source": "none", "name": "", "position": ""}
+
+    best = sorted(usable, key=_score_contact, reverse=True)[0]
     email = (best.get("email") or "").strip()
-    if "@" not in email:
-        return {"email": "", "type": "unknown", "confidence": "none", "source": "none", "name": "", "position": ""}
-
-    domain_part = email.split("@")[1].lower()
-    if _is_ats_domain(domain_part):
-        return {"email": "", "type": "unknown", "confidence": "none", "source": "none", "name": "", "position": ""}
 
     return {
         "email": email,
@@ -276,7 +326,33 @@ def get_best_contact(contacts: list[dict]) -> dict:
         "source": (best.get("source") or "none").strip(),
         "name": (best.get("name") or "").strip(),
         "position": (best.get("position") or "").strip(),
+        "verified": _is_verified(best),
+        "is_role_address": (best.get("source") or "").lower() == "pattern",
     }
+
+
+def should_send(best_contact: dict, domain_guessed: bool) -> tuple[bool, str]:
+    """Decide whether it is safe to auto-email this contact.
+
+    Returns (ok, reason). We DO NOT auto-send when:
+      - there is no email, or it's an ATS address (already filtered upstream),
+      - the domain was merely GUESSED ({company}.com) — could be an unrelated company,
+      - the address is a GUESSED PERSONAL address (yc_api / team-scrape) that isn't verified
+        (high bounce risk); a deliverable role address (careers@/hiring@) on a real domain is OK.
+    MX verification is done separately by the caller (email_verify).
+    """
+    email = (best_contact.get("email") or "").strip()
+    if not email or "@" not in email:
+        return False, "no_contact_email"
+
+    source = (best_contact.get("source") or "").lower()
+    verified = bool(best_contact.get("verified"))
+
+    if domain_guessed and not verified:
+        return False, "domain_guessed"
+    if source in GUESSED_PERSONAL_SOURCES and not verified:
+        return False, "guessed_personal_address"
+    return True, "ok"
 
 
 async def test_hunter() -> dict:

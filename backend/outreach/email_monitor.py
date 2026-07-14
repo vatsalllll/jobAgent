@@ -76,23 +76,38 @@ async def check_email_replies(hours_back: int = 48) -> list[dict]:
         subject = headers.get("subject", "")
         from_email = headers.get("from", "")
         body = _extract_body(msg.get("payload", {}))
+        is_reply = bool(headers.get("in-reply-to") or headers.get("references"))
 
         classification = classify_email(subject, body)
         if classification == "unknown":
             continue
 
+        # Extract the sender's email domain for precise matching.
+        m = re.search(r"[\w.+-]+@([\w.-]+)", from_email)
+        from_domain = m.group(1).lower() if m else ""
+
         conn = _get_db()
         rows = conn.execute(
-            "SELECT id, company FROM applications WHERE contact_email IS NOT NULL AND contact_email != '' ORDER BY created_at DESC"
+            "SELECT id, company, contact_email FROM applications WHERE contact_email IS NOT NULL AND contact_email != '' ORDER BY created_at DESC"
         ).fetchall()
         conn.close()
 
         matched_job = None
-        for row in rows:
-            company = row["company"]
-            if company.lower() in subject.lower() or company.lower() in from_email.lower():
-                matched_job = dict(row)
-                break
+        # 1) Strongest: the sender's domain matches a contact we actually emailed.
+        if from_domain:
+            for row in rows:
+                contact = (row["contact_email"] or "").lower()
+                if "@" in contact and contact.split("@")[1] == from_domain:
+                    matched_job = dict(row)
+                    break
+        # 2) Fallback: only trust a company-name match when the message is a genuine reply
+        #    (threaded via In-Reply-To/References), to avoid random inbox mail flipping status.
+        if not matched_job and is_reply:
+            for row in rows:
+                company = (row["company"] or "").lower()
+                if company and (company in subject.lower() or company in from_email.lower()):
+                    matched_job = dict(row)
+                    break
 
         if matched_job:
             job_id = matched_job["id"]
