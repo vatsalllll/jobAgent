@@ -130,38 +130,16 @@ async def verify_fidelity(
 ) -> dict:
     """Verify the tailored resume adds no fabricated employer/project/education.
 
-    The DETERMINISTIC check (`_programmatic_fidelity`) is authoritative and decides is_faithful,
-    so the gate is reliable regardless of LLM quality. The LLM fact-check is run best-effort as
-    ADVISORY signal (e.g. it may spot an inflated metric) and surfaced under `advisory_issues`,
-    but it does not by itself block a send (the free-tier verifier is too inconsistent for that).
+    Purely DETERMINISTIC — no LLM call. `_programmatic_fidelity` catches the real fabrication
+    vectors (new employer/project, non-BITS education) reliably, so we don't spend an LLM call
+    (or risk free-tier 429s) on an inconsistent self-verification.
     """
     prog_issues = _programmatic_fidelity(base_resume, tailored_resume)
-
-    advisory: list[dict] = []
-    try:
-        llm = get_llm()
-        prompt = VERIFICATION_PROMPT.format(
-            base_resume_json=json.dumps(base_resume, indent=2),
-            tailored_resume_json=json.dumps(tailored_resume, indent=2),
-        )
-        response_text = await llm.generate(
-            system_prompt="You are a strict resume fact-checker. Return ONLY valid JSON.",
-            user_prompt=prompt,
-            max_tokens=1024,
-            temperature=0.0,
-        )
-        result = extract_json(response_text)
-        if result and isinstance(result.get("issues"), list):
-            advisory = [i for i in result["issues"]
-                        if str(i.get("severity", "")).strip().lower().startswith("fabricat")]
-    except Exception:
-        advisory = []  # advisory only — never blocks
-
     return {
         "is_faithful": len(prog_issues) == 0,
         "verified": True,
         "issues": prog_issues,
-        "advisory_issues": advisory,
+        "advisory_issues": [],
     }
 
 

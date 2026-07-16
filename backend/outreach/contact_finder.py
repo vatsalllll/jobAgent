@@ -123,9 +123,19 @@ ATS_DOMAINS = [
 ]
 
 
+# Job-board / aggregator domains — these are NOT the employer. Never email them and never
+# treat them as a company domain (fixes bounces like hiring@himalayas.app "address not found").
+JOB_BOARD_DOMAINS = [
+    "himalayas.app", "remotive.com", "remoteok.com", "weworkremotely.com", "arbeitnow.com",
+    "jobicy.com", "themuse.com", "ycombinator.com", "cutshort.io", "hirist.tech", "hirist.com",
+    "foundit.in", "instahyre.com", "naukri.com", "indeed.com", "linkedin.com", "glassdoor.com",
+    "adzuna.com", "reed.co.uk", "usajobs.gov", "jooble.org", "findwork.dev", "simplify.jobs",
+]
+
+
 def _is_ats_domain(domain: str) -> bool:
     domain_lower = (domain or "").lower()
-    return any(ats in domain_lower for ats in ATS_DOMAINS)
+    return any(ats in domain_lower for ats in ATS_DOMAINS) or any(b in domain_lower for b in JOB_BOARD_DOMAINS)
 
 
 def _resolve_domain(company_name: str, company_url: str = "") -> tuple[str, str]:

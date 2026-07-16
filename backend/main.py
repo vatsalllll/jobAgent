@@ -55,6 +55,30 @@ async def verify_api_key(x_api_key: str = Header(default="")) -> None:
         raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
 
+_DEV_SIGNALS = [
+    "software", "engineer", "developer", "backend", "back end", "frontend", "front end",
+    "full stack", "full-stack", "sde", "swe", "programmer", "devops", "sre", "platform",
+    "infrastructure", "data engineer", "ml engineer", "machine learning engineer", "ai engineer",
+    "applied ai", "applied ml", "web developer", "mobile developer", "ios", "android",
+]
+_NON_DEV_ROLES = [
+    "artist", "designer", "ux ", "ui/ux", "graphic", "illustrat", "writer", "copywriter",
+    "content", "brand", "marketing", "sales", "account executive", "recruiter",
+    "talent acquisition", "community", "customer success", "customer support", "video",
+    "animator", "photographer", "social media", " seo", "editor", "3d ", "game artist",
+    "voice", "translator", "operador", "portaria", "vagas",
+]
+
+
+def _is_relevant_role(title: str) -> bool:
+    """Deterministically keep only software-engineering roles. Rejects non-dev 'AI' roles
+    (AI artist, designer, brand, marketing, …) that the LLM match-score can over-rate."""
+    t = (title or "").lower()
+    if any(n in t for n in _NON_DEV_ROLES):
+        return False
+    return any(d in t for d in _DEV_SIGNALS)
+
+
 def _resolve_pdf_path(attachment: str) -> str:
     """Resolve a (possibly relative) tailored-PDF path to an absolute path, or '' if missing."""
     if not attachment:
@@ -302,6 +326,11 @@ async def daily_sweep(
 
     try:
         discovered = await discover_jobs(sources=sources)
+
+        # Keep only software-engineering roles (drops AI-artist/designer/marketing/etc. noise).
+        before = len(discovered.jobs)
+        discovered.jobs = [j for j in discovered.jobs if _is_relevant_role(j.title)]
+        logger.info(f"Relevance filter: kept {len(discovered.jobs)}/{before} software-engineering roles")
 
         source_counts = {}
         for j in discovered.jobs:
