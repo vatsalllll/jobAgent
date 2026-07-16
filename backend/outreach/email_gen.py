@@ -1,4 +1,5 @@
 import json
+import re
 
 from config import settings
 from tailor.llm import get_llm, extract_json
@@ -70,13 +71,13 @@ Paragraph 4 — CTA: Low-friction ask (brief call, consideration, reply).
 
 TONE: Confident. Technical. Direct. Human. No corporate fluff.
 
-OUTPUT: Return valid JSON with these keys:
-{{
-  "subject": "<best subject line, 4-8 words, includes role title, no clickbait>",
-  "body": "<the email body, 120-180 words, plain text, 4 paragraphs separated by blank lines>"
-}}
+OUTPUT FORMAT — plain text only. Do NOT use JSON, markdown, or code fences.
+Write exactly this shape:
+Subject: <4-8 word subject line that includes the role title, no clickbait>
+<blank line>
+<the email body: 120-180 words, 3-4 short paragraphs separated by blank lines, signed off as {candidate_name}>
 
-Return ONLY the JSON."""
+Start your reply with "Subject:" and write nothing before it."""
 
 
 FOUNDER_EMAIL_PROMPT = """You are writing a cold email to a founder at a startup.
@@ -99,13 +100,13 @@ RULES:
 - Avoid generic compliments. Reference something specific from the company_signal.
 - Tone: respectful, curious, confident. Not sycophantic.
 
-OUTPUT: Return valid JSON:
-{{
-  "subject": "<short subject, under 8 words, includes role or company name>",
-  "body": "<the email body, 120-180 words, plain text>"
-}}
+OUTPUT FORMAT — plain text only. Do NOT use JSON, markdown, or code fences.
+Write exactly this shape:
+Subject: <short subject under 8 words, includes role or company name>
+<blank line>
+<the email body: 120-180 words, signed off as {candidate_name}>
 
-Return ONLY the JSON."""
+Start your reply with "Subject:" and write nothing before it."""
 
 
 SUBJECT_LINE_PROMPT = """Generate 5 subject line options for a cold outreach email.
@@ -170,6 +171,43 @@ async def build_context_block(
     return result
 
 
+def _clean_body(body: str) -> str:
+    b = (body or "").strip()
+    b = re.sub(r"^```[a-zA-Z]*\s*\n?", "", b)   # strip a leading code fence
+    b = re.sub(r"\n?```\s*$", "", b)            # strip a trailing code fence
+    return b.strip()
+
+
+def _looks_like_json(body: str) -> bool:
+    head = (body or "").lstrip()[:40].lower()
+    return head.startswith("{") or head.startswith("```json") or '"subject"' in head or '"body"' in head
+
+
+def _salvage_body_from_json(response: str):
+    """Last resort: pull the body value out of a malformed JSON-ish response."""
+    obj = extract_json(response)
+    if isinstance(obj, dict) and obj.get("body"):
+        return _clean_body(str(obj["body"]))
+    m = re.search(r'"body"\s*:\s*"(.*?)"\s*[,}]', response, re.DOTALL)
+    if m:
+        return _clean_body(m.group(1).replace("\\n", "\n").replace('\\"', '"'))
+    return None
+
+
+def _parse_email_response(response: str, default_subject: str):
+    """Parse a plain-text 'Subject: ...\\n\\n<body>' reply. Falls back to JSON if the model
+    returned that instead. Guarantees the body is clean text, never JSON scaffolding."""
+    raw = (response or "").strip()
+    obj = extract_json(raw)
+    if isinstance(obj, dict) and obj.get("body"):
+        return (obj.get("subject") or default_subject), _clean_body(str(obj["body"]))
+    cleaned = _clean_body(raw)
+    m = re.search(r"(?im)^\s*subject\s*:\s*(.+)$", cleaned)
+    if m:
+        return m.group(1).strip(), cleaned[m.end():].strip()
+    return default_subject, cleaned
+
+
 async def generate_outreach_email(
     job_title: str,
     company: str,
@@ -203,26 +241,35 @@ async def generate_outreach_email(
         )
 
     response = await llm.generate(
-        system_prompt="You are an experienced technical recruiter writing a cold outreach email. Return ONLY valid JSON.",
+        system_prompt="You are an experienced technical recruiter writing a cold outreach email. Reply in plain text starting with 'Subject:'. Never use JSON, markdown, or code fences.",
         user_prompt=prompt,
-        max_tokens=800,
+        max_tokens=1200,
         temperature=0.5,
     )
 
-    result = extract_json(response)
-    if result is None:
-        text = response.strip()
-        result = {
-            "subject": f"{job_title} — {settings.sender_name}",
-            "body": text,
-        }
+    default_subject = f"{job_title} — {settings.sender_name}"
+    subject, body = _parse_email_response(response, default_subject)
 
-    body = result.get("body", "")
-    if len(body.split()) < 60:
-        body += f"\n\nMy tailored resume is attached with further details.\n\nBest,\n{settings.sender_name}"
-    result["body"] = body
+    # Never let JSON scaffolding or code fences reach the recipient.
+    if _looks_like_json(body):
+        body = _salvage_body_from_json(response) or ""
+    body = _clean_body(body)
 
-    return result
+    if len(body.split()) < 40:
+        # Clean professional fallback — used only when the model output was unusable.
+        # Never a raw dump of the model response.
+        greeting = f"Dear {recipient_name}," if recipient_name and recipient_name != "Hiring Team" else "Hello,"
+        body = (
+            f"{greeting}\n\n"
+            f"I'm {settings.sender_name}, a final-year Computer Science student at BITS Pilani. I came across the "
+            f"{job_title} role at {company} and believe my background in AI systems, LLM orchestration, and full-stack "
+            f"engineering is a strong fit.\n\n"
+            f"I've shipped production multi-agent systems and real-time backends, and I'd welcome a brief chat about how "
+            f"I could contribute. My tailored resume is attached.\n\n"
+            f"Best,\n{settings.sender_name}"
+        )
+
+    return {"subject": subject.strip() or default_subject, "body": body}
 
 
 async def generate_subject_lines(

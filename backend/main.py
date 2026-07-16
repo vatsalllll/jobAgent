@@ -291,7 +291,7 @@ async def generate_email(request: EmailRequest):
 @app.post("/daily-sweep", response_model=DailySweepResponse)
 async def daily_sweep(
     sources: str = "yc,greenhouse,github,lever,ashby,smartrecruiters,workable,recruitee,teamtailor,themuse,himalayas,remoteok,remotive,weworkremotely,hackernews,cutshort,hirist,foundit",
-    max_jobs: int = 12,
+    max_jobs: int = 6,
     tailor: bool = True,
     generate_emails: bool = True,
     _: None = Depends(verify_api_key),
@@ -464,7 +464,11 @@ async def daily_sweep(
                     result_entry["email_body"] = email_body[:200]
                     email_count += 1
 
-                    if not is_faithful:
+                    if tailored_result.match_score < settings.min_match_score:
+                        result_entry["skipped_send"] = f"low_match_score ({tailored_result.match_score} < {settings.min_match_score})"
+                        application_status = "low_match"
+                        logger.info(f"Skipping {job.company} — match {tailored_result.match_score} below {settings.min_match_score} (likely mis-targeted job)")
+                    elif not is_faithful:
                         result_entry["skipped_send"] = "fidelity_failed"
                         application_status = "needs_review"
                         logger.warning(f"Fidelity check failed for {job.company} — NOT sending. Issues: {verification.get('issues')}")

@@ -59,6 +59,9 @@ class Settings(BaseSettings):
     # ── Job filters ──────────────────────────────────────
     min_salary_inr: int = 50_000
     max_listing_age_days: int = 4
+    # Don't email an application unless the tailored resume matches the JD at least this well
+    # (0-100). Blocks irrelevant/mis-targeted jobs (wrong field, wrong language) from being emailed.
+    min_match_score: int = 55
     target_locations: list[str] = ["Remote", "Bangalore", "Bengaluru", "Gurgaon", "Gurugram"]
     fallback_locations: list[str] = ["Hyderabad", "Pune"]
 

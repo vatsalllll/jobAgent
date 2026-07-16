@@ -132,15 +132,14 @@ class FallbackProvider(LLMProvider):
         self.name = "fallback[" + ",".join(p.name for p in providers) + "]"
 
     async def generate(self, system_prompt: str, user_prompt: str, max_tokens: int = 4096, temperature: float = 0.3) -> str:
-        last_err: Optional[Exception] = None
+        errors: list[str] = []
         for provider in self.providers:
             try:
                 return await provider.generate(system_prompt, user_prompt, max_tokens, temperature)
             except Exception as e:
-                last_err = e
+                errors.append(f"{provider.name}: {e}")
                 logger.warning(f"LLM provider '{provider.name}' failed ({e}); falling through to next.")
-                continue
-        raise RuntimeError(f"All LLM providers failed. Last error: {last_err}")
+        raise RuntimeError("All LLM providers failed — " + " | ".join(errors))
 
 
 # ── thinking / reasoning stripping ───────────────────────────────────
@@ -255,6 +254,13 @@ def get_llm() -> LLMProvider:
             p = None
         if p is not None:
             chain.append(p)
+
+    # Drop the HuggingFace fallback entirely when a real provider (Groq/Gemini/…) is available.
+    # HF's serverless routing (HF_PROVIDER=groq) can't serve Qwen and just produces confusing
+    # "model not supported" errors that mask the real failure.
+    non_hf = [p for p in chain if p.name != "huggingface"]
+    if non_hf:
+        chain = non_hf
 
     if not chain:
         raise ValueError(

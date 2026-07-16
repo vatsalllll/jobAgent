@@ -38,18 +38,19 @@ async def tailor_resume(
     response_text = await llm.generate(
         system_prompt=SYSTEM_PROMPT,
         user_prompt=prompt,
-        max_tokens=4096,
+        max_tokens=8000,
         temperature=0.3,
     )
 
     tailored = extract_json(response_text)
     if tailored is None:
-        # Retry once with stronger JSON instruction
-        retry_prompt = prompt + "\n\nIMPORTANT: Your response must be ONLY valid JSON. No markdown, no explanations. Just the JSON object."
+        # Retry once with stronger JSON instruction and a larger budget (truncation is the
+        # usual cause — a full one-page resume JSON can exceed a small max_tokens).
+        retry_prompt = prompt + "\n\nIMPORTANT: Your response must be ONLY valid JSON. No markdown, no explanations. Just the JSON object. Keep it to one page so it fits."
         response_text = await llm.generate(
             system_prompt=SYSTEM_PROMPT,
             user_prompt=retry_prompt,
-            max_tokens=4096,
+            max_tokens=8000,
             temperature=0.1,
         )
         tailored = extract_json(response_text)
