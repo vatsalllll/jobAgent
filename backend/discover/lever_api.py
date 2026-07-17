@@ -4,11 +4,23 @@ from datetime import datetime, timezone
 import httpx
 from discover.models import JobListing
 
+# Lever board slugs verified live (2026-07-17) to return >0 postings via the
+# public API. Case-sensitive. Prioritises India-based / India-hiring companies
+# (Meesho, Porter, Mindtickle, Hevo, Tala, Stable Money, GoTo, Onehouse) plus
+# AI / infra scaleups. Stale slugs from the old list (atlassian, plaid, twilio,
+# canva, coinbase, etc. — now 404 or empty) were dropped.
 LEVER_BOARDS = [
-    "spotify", "atlassian", "rippling", "figma-lever",
-    "postman-lever", "twilio", "zapier", "canva",
-    "plaid", "intercom", "monday", "grammarly",
-    "benchling", "amplitude", "coinbase",
+    # Still-live from the original list
+    "spotify",
+    # Enterprise / infra / AI
+    "palantir", "veeva", "shieldai", "zoox", "sysdig", "secureframe",
+    "matchgroup", "hive", "metabase", "scaleway", "ro", "regrello",
+    "supermove", "whoop", "toku", "proof", "termgrid", "artera",
+    "angellist", "AIFund", "tryjeeves",
+    # India-based / India-hiring
+    "meesho", "zeta", "porter", "mindtickle", "hevodata", "tala",
+    "stable-money1", "weekdayworks", "Onehouse", "GoToGroup",
+    "lingarogroup", "vedatechlabs", "vogo",
 ]
 
 ROLE_KEYWORDS = [

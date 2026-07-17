@@ -33,6 +33,66 @@ COMPANY_DOMAINS = {
     "coinbase": "coinbase.com", "gitlab": "gitlab.com", "windsurf": "windsurf.com",
 }
 
+# Verified domains for the expanded ATS company boards (Greenhouse/Ashby/Lever/SmartRecruiters).
+COMPANY_DOMAINS.update({
+    "phonepe": "phonepe.com", "groww": "groww.in", "scaleai": "scale.com",
+    "togetherai": "together.ai", "fireworksai": "fireworks.ai", "glean": "glean.com",
+    "coreweave": "coreweave.com", "assemblyai": "assemblyai.com", "speechmatics": "speechmatics.com",
+    "humeai": "hume.ai", "stabilityai": "stability.ai", "databricks": "databricks.com",
+    "airtable": "airtable.com", "cloudflare": "cloudflare.com", "robinhood": "robinhood.com",
+    "affirm": "affirm.com", "chime": "chime.com", "gusto": "gusto.com", "checkr": "checkr.com",
+    "samsara": "samsara.com", "elastic": "elastic.co", "mongodb": "mongodb.com",
+    "dropbox": "dropbox.com", "asana": "asana.com", "twitch": "twitch.tv", "lyft": "lyft.com",
+    "airbnb": "airbnb.com", "pinterest": "pinterest.com", "nextdoor": "nextdoor.com",
+    "faire": "faire.com", "fivetran": "fivetran.com", "webflow": "webflow.com",
+    "calendly": "calendly.com", "lattice": "lattice.com", "carta": "carta.com",
+    "verkada": "verkada.com", "remote": "remote.com", "grafanalabs": "grafana.com",
+    "tailscale": "tailscale.com", "planetscale": "planetscale.com", "cockroachlabs": "cockroachlabs.com",
+    "clickhouse": "clickhouse.com", "starburst": "starburst.io", "singlestore": "singlestore.com",
+    "yugabyte": "yugabyte.com", "fastly": "fastly.com", "circleci": "circleci.com",
+    "buildkite": "buildkite.com", "chainguard": "chainguard.dev", "tines": "tines.com",
+    "torq": "torq.io", "descope": "descope.com", "customerio": "customer.io", "braze": "braze.com",
+    "iterable": "iterable.com", "klaviyo": "klaviyo.com", "attentive": "attentive.com",
+    "sendbird": "sendbird.com", "adyen": "adyen.com", "gocardless": "gocardless.com",
+    "sumup": "sumup.com", "nubank": "nubank.com.br", "quintoandar": "quintoandar.com.br",
+    "ebanx": "ebanx.com", "c6bank": "c6bank.com.br", "stone": "stone.com.br",
+    "gemini": "gemini.com", "komodohealth": "komodohealth.com",
+    # Ashby
+    "cognition": "cognition.ai", "harvey": "harvey.ai", "sierra": "sierra.ai",
+    "decagon": "decagon.ai", "langchain": "langchain.com", "llamaindex": "llamaindex.ai",
+    "elevenlabs": "elevenlabs.io", "suno": "suno.com", "deepgram": "deepgram.com",
+    "cartesia": "cartesia.ai", "synthesia": "synthesia.io", "runway": "runwayml.com",
+    "pika": "pika.art", "viggle": "viggle.ai", "tavus": "tavus.io", "rime": "rime.ai",
+    "character": "character.ai", "cerebras": "cerebras.net", "crusoe": "crusoe.ai",
+    "etched": "etched.com", "dmatrix": "d-matrix.ai", "baseten": "baseten.co",
+    "replit": "replit.com", "pinecone": "pinecone.io", "weaviate": "weaviate.io",
+    "posthog": "posthog.com", "watershed": "watershed.com", "vapi": "vapi.ai",
+    "bland": "bland.ai", "gorgias": "gorgias.com", "pylon": "usepylon.com", "plain": "plain.com",
+    "crisp": "crisp.chat", "atlan": "atlan.com", "navi": "navi.com", "sarvam": "sarvam.ai",
+    # Lever
+    "palantir": "palantir.com", "meesho": "meesho.com", "angellist": "angellist.com",
+    "sysdig": "sysdig.com", "secureframe": "secureframe.com", "shieldai": "shield.ai",
+    "zoox": "zoox.com", "regrello": "regrello.com", "supermove": "supermove.com",
+    "whoop": "whoop.com", "metabase": "metabase.com", "toku": "toku.com", "ro": "ro.co",
+    "scaleway": "scaleway.com", "veeva": "veeva.com", "hive": "thehive.ai",
+    "matchgroup": "mtch.com", "aifund": "aifund.ai", "tryjeeves": "tryjeeves.com",
+    "tala": "tala.co", "weekdayworks": "weekday.works", "stablemoney1": "stablemoney.in",
+    "termgrid": "termgrid.com", "onehouse": "onehouse.ai", "hevodata": "hevodata.com",
+    "gotogroup": "gotocompany.com", "lingarogroup": "lingarogroup.com", "mindtickle": "mindtickle.com",
+    # SmartRecruiters
+    "servicenow": "servicenow.com", "aristanetworks": "arista.com", "linkedin": "linkedin.com",
+    "microstrategy": "microstrategy.com", "uber": "uber.com", "smithsgroup": "smiths.com",
+    "sandisk": "sandisk.com", "renesaselectronics": "renesas.com", "eurofins": "eurofins.com",
+    "nexthink": "nexthink.com", "nielsen": "nielsen.com", "informa": "informa.com",
+    "aecom": "aecom.com", "egisgroup": "egis-group.com", "abbvie": "abbvie.com",
+    "wabtec": "wabteccorp.com", "continental": "continental.com", "sixt": "sixt.com",
+    "alten": "alten.com", "devoteam": "devoteam.com", "atos": "atos.net", "endava": "endava.com",
+    "sutherland": "sutherlandglobal.com", "ubisoft": "ubisoft.com", "believe": "believe.com",
+    "trivago": "trivago.com", "softwaremind": "softwaremind.com", "sigmasoftware": "sigma.software",
+    "devexperts": "devexperts.com", "captech": "captechconsulting.com", "prosum": "prosum.com",
+    "rebelfoods": "rebelfoods.com",
+})
+
 # Legacy fuzzy map (kept for backward compatibility).
 COMMON_DOMAINS = {v: v for v in set(COMPANY_DOMAINS.values())}
 
