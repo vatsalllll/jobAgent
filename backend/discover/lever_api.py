@@ -55,7 +55,8 @@ async def scrape_lever_all(max_age_days=4, target_locations=None, max_concurrent
 
                     if not any(kw in title_l for kw in ROLE_KEYWORDS):
                         continue
-                    if not any(kw in title_l for kw in JUNIOR_KEYWORDS) and "intern" not in commitment.lower():
+                    # Keep any non-senior SWE role (requiring the literal word "junior" starved results).
+                    if any(s in title_l for s in ["senior", "staff", "principal", " lead", "lead ", "director", "head of", " manager", " vp", "architect", "sr.", "sr ", "distinguished"]):
                         continue
                     if not (any(t.lower() in loc_l for t in target_locations) or "remote" in loc_l or "india" in loc_l):
                         continue

@@ -17,6 +17,50 @@ ASHBY_BOARDS = [
     "mercury",
     "modal",
     "cursor",
+    # Frontier AI / ML labs and infra (verified live 2026-07)
+    "openai",
+    "perplexity",
+    "cognition",
+    "harvey",
+    "sierra",
+    "decagon",
+    "langchain",
+    "llamaindex",
+    "elevenlabs",
+    "suno",
+    "deepgram",
+    "cartesia",
+    "synthesia",
+    "runway",
+    "pika",
+    "viggle",
+    "tavus",
+    "rime",
+    "character",
+    "cerebras",
+    "crusoe",
+    "etched",
+    "d-matrix",
+    "rain",
+    "baseten",
+    "replit",
+    "pinecone",
+    "weaviate",
+    # Product / infra scaleups
+    "notion",
+    "posthog",
+    "watershed",
+    "vapi",
+    "bland",
+    "gorgias",
+    "pylon",
+    "plain",
+    "crisp",
+    "lorikeet",
+    # India-based / India-hiring
+    "atlan",
+    "navi",
+    "sarvam",
 ]
 
 
@@ -55,11 +99,8 @@ async def scrape_ashby_board(client: httpx.AsyncClient, board: str, target_locat
             if not any(t.lower() in location_lower for t in target_locations):
                 continue
 
-        is_junior = any(kw in title_lower for kw in [
-            "intern", "junior", "associate", "new grad", "entry", "apprentice", " i ", " i/"
-        ]) and not any(s in title_lower for s in ["senior", "staff", "principal", "lead", "director", "head of", "manager", "vp", "architect"])
-
-        if not is_junior:
+        # Keep any non-senior SWE role (requiring the literal word "junior" starved results).
+        if any(s in title_lower for s in ["senior", "staff", "principal", " lead", "lead ", "director", "head of", " manager", " vp", "architect", "sr.", "sr ", "distinguished"]):
             continue
 
         seniority = "intern" if "intern" in title_lower else "junior"
