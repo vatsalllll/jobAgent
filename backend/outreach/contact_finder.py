@@ -9,17 +9,32 @@ from config import settings
 from outreach.google_search import find_linkedin_contacts, find_careers_page
 from outreach.contact_discovery_free import find_contacts_free
 
-COMMON_DOMAINS = {
-    "stripe.com": "stripe.com", "notion.so": "notion.so", "figma.com": "figma.com",
-    "vercel.com": "vercel.com", "datadoghq.com": "datadoghq.com", "reddit.com": "reddit.com",
-    "discord.com": "discord.com", "roblox.com": "roblox.com", "brex.com": "brex.com",
-    "ramp.com": "ramp.com", "postman.com": "postman.com", "slice.com": "slice.com",
-    "duolingo.com": "duolingo.com", "instacart.com": "instacart.com", "zoho.com": "zoho.com",
-    "atlassian.com": "atlassian.com", "spotify.com": "spotify.com", "rippling.com": "rippling.com",
-    "canva.com": "canva.com", "plaid.com": "plaid.com", "intercom.com": "intercom.com",
-    "monday.com": "monday.com", "grammarly.com": "grammarly.com", "benchling.com": "benchling.com",
-    "amplitude.com": "amplitude.com", "coinbase.com": "coinbase.com",
+# Verified company domains, keyed by the cleaned company name (lowercase, alphanumeric only).
+# Exact-matched first — accurate even for non-.com domains where a {name}.com guess would be wrong.
+COMPANY_DOMAINS = {
+    "openai": "openai.com", "anthropic": "anthropic.com", "notion": "notion.so",
+    "linear": "linear.app", "huggingface": "huggingface.co", "cohere": "cohere.com",
+    "perplexity": "perplexity.ai", "cursor": "cursor.com", "anysphere": "cursor.com",
+    "hasura": "hasura.io", "cred": "cred.club", "razorpay": "razorpay.com",
+    "swiggy": "swiggy.com", "zerodha": "zerodha.com", "smallcase": "smallcase.com",
+    "browserstack": "browserstack.com", "chargebee": "chargebee.com", "freshworks": "freshworks.com",
+    "hashicorp": "hashicorp.com", "doordash": "doordash.com", "replicate": "replicate.com",
+    "twilio": "twilio.com", "zapier": "zapier.com", "retool": "retool.com", "vanta": "vanta.com",
+    "mercury": "mercury.com", "modal": "modal.com", "ateam": "a.team", "vercel": "vercel.com",
+    "bosch": "bosch.com", "boschgroup": "bosch.com", "deliveryhero": "deliveryhero.com",
+    "experian": "experian.com", "wise": "wise.com", "grab": "grab.com", "visa": "visa.com",
+    "dataiku": "dataiku.com", "wayfair": "wayfair.com", "bytedance": "bytedance.com",
+    "figma": "figma.com", "stripe": "stripe.com", "datadog": "datadoghq.com", "reddit": "reddit.com",
+    "discord": "discord.com", "roblox": "roblox.com", "brex": "brex.com", "ramp": "ramp.com",
+    "postman": "postman.com", "duolingo": "duolingo.com", "instacart": "instacart.com",
+    "zoho": "zoho.com", "atlassian": "atlassian.com", "spotify": "spotify.com",
+    "rippling": "rippling.com", "canva": "canva.com", "plaid": "plaid.com", "intercom": "intercom.com",
+    "grammarly": "grammarly.com", "benchling": "benchling.com", "amplitude": "amplitude.com",
+    "coinbase": "coinbase.com", "gitlab": "gitlab.com", "windsurf": "windsurf.com",
 }
+
+# Legacy fuzzy map (kept for backward compatibility).
+COMMON_DOMAINS = {v: v for v in set(COMPANY_DOMAINS.values())}
 
 CONTACT_PATTERNS = [
     "founders@{domain}",
@@ -158,6 +173,10 @@ def _resolve_domain(company_name: str, company_url: str = "") -> tuple[str, str]
         if netloc and not _is_ats_domain(netloc) and "." in netloc:
             return netloc, "url"
 
+    # Exact verified match first (accurate for non-.com domains).
+    if clean and clean in COMPANY_DOMAINS:
+        return COMPANY_DOMAINS[clean], "known"
+
     for known_domain in COMMON_DOMAINS:
         if clean and (clean in known_domain or known_domain.startswith(clean)):
             return COMMON_DOMAINS[known_domain], "known"
@@ -240,6 +259,27 @@ async def _search_hunter(domain: str, api_key: str) -> list[dict]:
         return []
 
 
+async def _clearbit_domain(company_name: str) -> str:
+    """Resolve a company's real domain via Clearbit's free autocomplete API (no key). Best-effort."""
+    q = (company_name or "").strip()
+    if not q:
+        return ""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                "https://autocomplete.clearbit.com/v1/companies/suggest",
+                params={"query": q},
+            )
+            if resp.status_code != 200:
+                return ""
+            data = resp.json()
+            if isinstance(data, list) and data:
+                return (data[0].get("domain") or "").lower()
+    except Exception:
+        return ""
+    return ""
+
+
 async def discover_company_info(company_name: str, company_url: str = "") -> dict:
     """
     Full company info discovery:
@@ -258,6 +298,14 @@ async def discover_company_info(company_name: str, company_url: str = "") -> dic
         }
 
     domain, domain_origin = _resolve_domain(company_name, company_url)
+
+    # If we could only GUESS the domain ({name}.com), confirm it via Clearbit (free). Accept the
+    # guess only when Clearbit independently returns the SAME domain — this unblocks real .com
+    # companies while never emailing the wrong company for ambiguous names (e.g. perplexity.ca).
+    if domain and domain_origin == "guessed":
+        cb = await _clearbit_domain(company_name)
+        if cb and cb == domain.lower():
+            domain_origin = "confirmed"
 
     contacts = []
     linkedin_contacts = []

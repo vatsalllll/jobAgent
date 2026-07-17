@@ -186,8 +186,15 @@ class TestFindCompanyDomain:
 
     @pytest.mark.asyncio
     async def test_no_url_guesses_domain(self):
-        domain = await find_company_domain("Linear", "")
-        assert domain == "linear.com"
+        # Unknown company with no URL → guessed {name}.com
+        domain = await find_company_domain("Zzqwx Unknownco", "")
+        assert domain == "zzqwxunknownco.com"
+
+    @pytest.mark.asyncio
+    async def test_known_company_resolves_real_domain(self):
+        # Verified map returns the correct domain even when it's not .com
+        assert await find_company_domain("Linear", "") == "linear.app"
+        assert await find_company_domain("Perplexity", "") == "perplexity.ai"
 
     @pytest.mark.asyncio
     async def test_empty_company_name_returns_empty(self):
